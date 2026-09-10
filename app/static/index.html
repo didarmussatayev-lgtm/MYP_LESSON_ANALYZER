@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>MYP Lesson Analyzer</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
+  h1 { font-size: 22px; }
+  h2 { font-size: 16px; margin-top: 28px; color: #1F3864; }
+  label { display: block; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  input[type=text], textarea { width: 100%; padding: 6px 8px; box-sizing: border-box; font-size: 14px; margin-top: 2px; }
+  textarea { min-height: 42px; }
+  input[type=file] { margin-top: 4px; }
+  .row2 { display: flex; gap: 12px; }
+  .row2 > div { flex: 1; }
+  button { margin-top: 20px; padding: 10px 20px; background: #1F3864; color: white; border: none; border-radius: 4px; font-size: 15px; cursor: pointer; }
+  button:disabled { background: #999; cursor: default; }
+  #status { margin-top: 20px; padding: 12px; background: #f2f2f2; border-radius: 4px; font-size: 13px; white-space: pre-wrap; display: none; }
+  #status.visible { display: block; }
+  .note { font-size: 12px; color: #666; margin-top: 4px; }
+  #downloadLink { display: none; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<h1>MYP Lesson Analyzer</h1>
+<p class="note">AI-assisted черновик анализа урока. Не заменяет решение методиста/коуча. См. методологические ограничения в самом отчёте.</p>
+
+<form id="lessonForm">
+
+  <h2>Аудиозаписи</h2>
+  <label>Трек учителя (петличка)</label>
+  <input type="file" name="teacher_track" accept="audio/*" required>
+
+  <label>Общий трек класса (телефон в центре)</label>
+  <input type="file" name="classroom_track" accept="audio/*" required>
+
+  <label>Слайды (pptx, опционально)</label>
+  <input type="file" name="pptx" accept=".pptx">
+
+  <h2>Основные данные</h2>
+  <div class="row2">
+    <div><label>Учитель</label><input type="text" name="teacher_name"></div>
+    <div><label>Предмет</label><input type="text" name="subject"></div>
+  </div>
+  <label>Дата урока</label>
+  <input type="text" name="lesson_date" placeholder="2026-08-20">
+
+  <h2>Планирование урока (unit planner)</h2>
+  <p class="note">Это "planned"-сторона отчёта — без неё Блок 1 (planned vs observed) будет пустым.</p>
+
+  <label>Key Concept</label><textarea name="key_concept"></textarea>
+  <label>Related Concept(s)</label><textarea name="related_concept"></textarea>
+  <label>Global Context</label><textarea name="global_context"></textarea>
+  <label>Statement of Inquiry</label><textarea name="statement_of_inquiry"></textarea>
+  <label>Inquiry Questions</label><textarea name="inquiry_questions"></textarea>
+  <label>Learning Objectives</label><textarea name="learning_objectives"></textarea>
+  <label>ATL Skills</label><textarea name="atl_skills"></textarea>
+  <label>Learner Profile</label><textarea name="learner_profile"></textarea>
+  <label>Assessment Criteria</label><textarea name="assessment_criteria"></textarea>
+  <label>Learning Experiences</label><textarea name="learning_experiences"></textarea>
+
+  <button type="submit" id="submitBtn">Загрузить и обработать</button>
+</form>
+
+<div id="status"></div>
+<a id="downloadLink" href="#">Скачать отчёт (.docx)</a>
+
+<script>
+const form = document.getElementById('lessonForm');
+const statusDiv = document.getElementById('status');
+const submitBtn = document.getElementById('submitBtn');
+const downloadLink = document.getElementById('downloadLink');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  submitBtn.disabled = true;
+  downloadLink.style.display = 'none';
+  statusDiv.classList.add('visible');
+  statusDiv.textContent = 'Загрузка файлов...';
+
+  const formData = new FormData(form);
+
+  let jobId;
+  try {
+    const res = await fetch('/jobs', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(errText);
+    }
+    const data = await res.json();
+    jobId = data.job_id;
+  } catch (err) {
+    statusDiv.textContent = 'Ошибка загрузки: ' + err.message;
+    submitBtn.disabled = false;
+    return;
+  }
+
+  statusDiv.textContent = 'Задача создана (' + jobId + '). Обработка начата...';
+
+  const poll = setInterval(async () => {
+    const res = await fetch('/jobs/' + jobId);
+    const data = await res.json();
+
+    statusDiv.textContent = 'Статус: ' + data.status + '\n\n' + data.progress_log.join('\n');
+
+    if (data.status === 'done') {
+      clearInterval(poll);
+      submitBtn.disabled = false;
+      downloadLink.href = '/jobs/' + jobId + '/download';
+      downloadLink.style.display = 'inline-block';
+    } else if (data.status === 'error') {
+      clearInterval(poll);
+      submitBtn.disabled = false;
+      statusDiv.textContent += '\n\nОШИБКА:\n' + data.error;
+    }
+  }, 4000);
+});
+</script>
+
+</body>
+</html>

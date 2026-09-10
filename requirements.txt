@@ -1,0 +1,11 @@
+faster-whisper==1.0.3
+scipy==1.13.1
+numpy==1.26.4
+librosa==0.10.2.post1
+soundfile==0.12.1
+python-pptx==0.6.23
+scikit-learn==1.5.0
+anthropic==0.34.2
+docxtpl==0.17.0
+PyYAML==6.0.1
+tqdm==4.66.4

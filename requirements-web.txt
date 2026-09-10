@@ -1,0 +1,21 @@
+# Зависимости веб-приложения (app/main.py). Легче, чем requirements.txt для
+# локального CLI-варианта - faster-whisper здесь не нужен, транскрипция
+# идёт через Gemini API, а не локальную ML-модель.
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.9
+aiofiles==24.1.0
+
+google-genai==2.19.0
+
+scipy==1.13.1
+numpy==1.26.4
+librosa==0.10.2.post1
+soundfile==0.12.1
+
+python-pptx==0.6.23
+scikit-learn==1.5.0
+
+docxtpl==0.17.0
+PyYAML==6.0.1

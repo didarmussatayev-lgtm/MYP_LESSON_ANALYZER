@@ -1,0 +1,32 @@
+# Пример входных данных, которые учитель заполняет ДО урока.
+# Это "planned"-сторона Блока 1 отчёта - сравнивается с тем, что реально
+# зафиксировано в аудио (observed evidence).
+#
+# Скопируйте этот файл, переименуйте под конкретный урок, отредактируйте
+# значения и передайте путь через --planned-lesson в pipeline.py.
+
+teacher_name: "А. Иванова"
+subject: "Biology"
+lesson_date: "2026-08-20"
+
+# 10 пунктов unit planner - структура ключей ФИКСИРОВАНА (используется в
+# llm_analysis.py и report.py), значения - произвольный текст на русском
+# или английском.
+key_concept: "Change"
+related_concept: "Systems, Interaction"
+global_context: "Scientific and technical innovation"
+statement_of_inquiry: >
+  Living systems change over time through the interaction of internal
+  processes and external factors.
+inquiry_questions: >
+  Factual: What is photosynthesis?
+  Conceptual: How are photosynthesis and cellular respiration related?
+  Debatable: Could life exist without photosynthesis?
+learning_objectives: "Criterion A: Knowing and understanding; Criterion C: Processing and evaluating"
+atl_skills: "Critical thinking (compare and evaluate evidence)"
+learner_profile: "Inquirers, Thinkers"
+assessment_criteria: "MYP Sciences Criterion A and C"
+learning_experiences: >
+  Group comparison of experimental results (light vs no-light plant
+  samples), followed by whole-class discussion evaluating which
+  explanation is best supported by the evidence.

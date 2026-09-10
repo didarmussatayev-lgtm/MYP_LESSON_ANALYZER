@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+work/
+output/
+uploads/
+app/uploads/
+app/output/
+app/work/
+*.wav
+*.mp3
+*.m4a
+.git/
+.gitignore
+README.md
+examples/

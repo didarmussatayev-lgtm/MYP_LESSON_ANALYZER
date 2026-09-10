@@ -1,0 +1,21 @@
+venv/
+__pycache__/
+*.pyc
+
+# рабочие/выходные данные - никогда не коммитить (аудио с голосами детей)
+work/
+output/
+uploads/
+app/uploads/
+app/output/
+app/work/
+
+*.wav
+*.mp3
+*.m4a
+
+# промежуточные файлы конвертации при отладке шаблона
+templates/*.pdf
+templates/page-*.jpg
+
+.env
