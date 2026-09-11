@@ -25,6 +25,37 @@ from google.genai import types
 
 from common import Segment
 
+# python:3.11-slim (образ, используемый в Dockerfile) не содержит системный
+# /etc/mime.types (пакет mime-support туда не входит), поэтому встроенное
+# в Python угадывание MIME-типа по расширению файла ненадёжно и может
+# вернуть None даже для обычных аудиоформатов вроде .m4a - тогда Gemini
+# Files API падает с "Unknown mime type". Прописываем типы явно, без
+# зависимости от системных файлов окружения.
+_AUDIO_MIME_TYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".mp4": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".flac": "audio/flac",
+    ".webm": "audio/webm",
+    ".opus": "audio/opus",
+}
+
+
+def _guess_audio_mime_type(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    mime_type = _AUDIO_MIME_TYPES.get(ext)
+    if mime_type is None:
+        raise ValueError(
+            f"Не удалось определить MIME-тип для файла '{path}' (расширение '{ext}'). "
+            f"Поддерживаемые форматы: {', '.join(_AUDIO_MIME_TYPES)}. "
+            "Если формат другой - добавьте его в _AUDIO_MIME_TYPES в gemini_transcribe.py."
+        )
+    return mime_type
+
 # Проверьте актуальное имя модели в консоли Google AI перед первым запуском -
 # модели обновляются часто. gemini-2.5-flash - разумный баланс цены/качества
 # на момент написания.
@@ -73,7 +104,11 @@ def transcribe_track(audio_path: str) -> list[Segment]:
     """
     client = _get_client()
 
-    uploaded_file = client.files.upload(file=audio_path)
+    mime_type = _guess_audio_mime_type(audio_path)
+    uploaded_file = client.files.upload(
+        file=audio_path,
+        config=types.UploadFileConfig(mime_type=mime_type),
+    )
 
     response = client.models.generate_content(
         model=MODEL,
