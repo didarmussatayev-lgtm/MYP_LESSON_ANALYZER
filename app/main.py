@@ -21,6 +21,7 @@ import shutil
 import sys
 import traceback
 import uuid
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,23 @@ class Job:
 
 
 JOBS: dict[str, Job] = {}
+
+
+def _safe_filename(original_name: str) -> str:
+    """
+    Приводит имя файла к безопасному ASCII-виду, сохраняя расширение.
+
+    Причина (см. чат): исходные имена файлов часто содержат кириллицу и
+    пробелы (например с телефона - "улица Турар Рыскулова.m4a"). Такие
+    имена ломались в двух разных местах Gemini SDK (угадывание MIME-типа
+    и HTTP-заголовок при загрузке) - оба случая уже чинились по отдельности.
+    Правильное решение - устранить причину один раз здесь, при приёме
+    файла, а не гоняться за каждым местом в сторонних библиотеках, где
+    имя файла может всплыть в неожиданном ASCII-only контексте.
+    """
+    ext = Path(original_name).suffix.lower()
+    safe_ext = re.sub(r"[^a-z0-9.]", "", ext) or ".bin"
+    return f"{uuid.uuid4().hex}{safe_ext}"
 
 
 def _run_job(job_id: str, teacher_path: Path, classroom_path: Path, planned_path: Path, pptx_path: Path | None) -> None:
@@ -124,8 +142,8 @@ async def create_job(
     job_dir = UPLOADS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    teacher_path = job_dir / f"teacher_{teacher_track.filename}"
-    classroom_path = job_dir / f"classroom_{classroom_track.filename}"
+    teacher_path = job_dir / f"teacher_{_safe_filename(teacher_track.filename or 'audio.wav')}"
+    classroom_path = job_dir / f"classroom_{_safe_filename(classroom_track.filename or 'audio.wav')}"
     with open(teacher_path, "wb") as f:
         shutil.copyfileobj(teacher_track.file, f)
     with open(classroom_path, "wb") as f:
@@ -133,7 +151,7 @@ async def create_job(
 
     pptx_path = None
     if pptx is not None and pptx.filename:
-        pptx_path = job_dir / f"slides_{pptx.filename}"
+        pptx_path = job_dir / f"slides_{_safe_filename(pptx.filename)}"
         with open(pptx_path, "wb") as f:
             shutil.copyfileobj(pptx.file, f)
 
