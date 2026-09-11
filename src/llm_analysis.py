@@ -25,7 +25,7 @@ from google.genai import types
 
 from common import Utterance
 
-MODEL = "gemini-2.5-flash"  # см. README про выбор модели / актуальные названия
+MODEL = "gemini-3.6-flash"  # см. README про выбор модели / актуальные названия - проверять периодически
 
 _client: genai.Client | None = None
 
