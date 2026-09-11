@@ -59,9 +59,10 @@ def _guess_audio_mime_type(path: str) -> str:
     return mime_type
 
 # Проверьте актуальное имя модели в консоли Google AI перед первым запуском -
-# модели обновляются часто. gemini-2.5-flash - разумный баланс цены/качества
-# на момент написания.
-MODEL = "gemini-2.5-flash"
+# модели обновляются часто (gemini-2.5-flash уже выведена из доступа для
+# новых проектов на момент этой правки, сентябрь 2026). gemini-3.6-flash -
+# актуальный Flash-уровень с адекватной ценой на этот момент.
+MODEL = "gemini-3.6-flash"
 
 _client: genai.Client | None = None
 
