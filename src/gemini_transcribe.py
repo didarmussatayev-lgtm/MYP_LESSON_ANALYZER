@@ -19,6 +19,8 @@ from dataclasses import asdict
 import json
 import os
 import re
+import shutil
+import tempfile
 
 from google import genai
 from google.genai import types
@@ -105,10 +107,25 @@ def transcribe_track(audio_path: str) -> list[Segment]:
     client = _get_client()
 
     mime_type = _guess_audio_mime_type(audio_path)
-    uploaded_file = client.files.upload(
-        file=audio_path,
-        config=types.UploadFileConfig(mime_type=mime_type),
-    )
+
+    # Gemini SDK передаёт имя файла в HTTP-заголовке запроса на загрузку, а
+    # HTTP-заголовки должны быть ASCII/latin-1. Имена файлов с кириллицей
+    # (типично для записей с телефона - названия улиц, папок и т.п.) ломают
+    # запрос ещё до отправки в Google (UnicodeEncodeError на стороне httpx).
+    # Поэтому перед загрузкой всегда копируем файл во временный с безопасным
+    # ASCII-именем - вне зависимости от того, как называется исходный файл.
+    ext = os.path.splitext(audio_path)[1]
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        safe_path = tmp.name
+    shutil.copyfile(audio_path, safe_path)
+
+    try:
+        uploaded_file = client.files.upload(
+            file=safe_path,
+            config=types.UploadFileConfig(mime_type=mime_type),
+        )
+    finally:
+        os.remove(safe_path)
 
     response = client.models.generate_content(
         model=MODEL,
