@@ -80,7 +80,7 @@ def _safe_filename(original_name: str) -> str:
     return f"{uuid.uuid4().hex}{safe_ext}"
 
 
-def _run_job(job_id: str, teacher_path: Path, classroom_path: Path, planned_path: Path, pptx_path: Path | None) -> None:
+def _run_job(job_id: str, teacher_path: Path, classroom_path: Path | None, planned_path: Path, pptx_path: Path | None) -> None:
     job = JOBS[job_id]
     job.status = "running"
 
@@ -91,7 +91,7 @@ def _run_job(job_id: str, teacher_path: Path, classroom_path: Path, planned_path
         out_path = OUTPUT_DIR / f"{job_id}.docx"
         pipeline.run_pipeline(
             teacher_track=str(teacher_path),
-            classroom_track=str(classroom_path),
+            classroom_track=str(classroom_path) if classroom_path else None,
             planned_lesson_path=str(planned_path),
             out_path=str(out_path),
             pptx_path=str(pptx_path) if pptx_path else None,
@@ -122,7 +122,7 @@ async def index() -> HTMLResponse:
 @app.post("/jobs")
 async def create_job(
     teacher_track: UploadFile = File(...),
-    classroom_track: UploadFile = File(...),
+    classroom_track: UploadFile | None = File(None),
     pptx: UploadFile | None = File(None),
     teacher_name: str = Form(""),
     subject: str = Form(""),
@@ -143,11 +143,14 @@ async def create_job(
     job_dir.mkdir(parents=True, exist_ok=True)
 
     teacher_path = job_dir / f"teacher_{_safe_filename(teacher_track.filename or 'audio.wav')}"
-    classroom_path = job_dir / f"classroom_{_safe_filename(classroom_track.filename or 'audio.wav')}"
     with open(teacher_path, "wb") as f:
         shutil.copyfileobj(teacher_track.file, f)
-    with open(classroom_path, "wb") as f:
-        shutil.copyfileobj(classroom_track.file, f)
+
+    classroom_path = None
+    if classroom_track is not None and classroom_track.filename:
+        classroom_path = job_dir / f"classroom_{_safe_filename(classroom_track.filename)}"
+        with open(classroom_path, "wb") as f:
+            shutil.copyfileobj(classroom_track.file, f)
 
     pptx_path = None
     if pptx is not None and pptx.filename:
