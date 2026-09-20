@@ -94,16 +94,50 @@ TRANSCRIBE_PROMPT = """Ты — ассистент для транскрипци
 - Если фрагмент неразборчив - пропусти его, не выдумывай текст.
 """
 
+# Используется, когда есть только ОДИН трек (обычно петличка учителя, но на
+# ней слышны и голоса учеников). Просим модель дополнительно предположить
+# роль говорящего по содержанию и тону речи - это НЕ акустическая
+# диаризация (Gemini не анализирует тембр голоса отдельно), а смысловая
+# эвристика: кто ведёт урок/задаёт вопросы (учитель) и кто отвечает
+# короткими репликами (ученики). Точность ниже, чем при физическом
+# разделении по двум трекам - см. предупреждение в report.py.
+TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT = """Ты — ассистент для транскрипции аудиозаписи школьного урока.
+Запись сделана на один микрофон (обычно петличка учителя), поэтому на ней
+слышен и учитель, и ученики. Транскрибируй речь ПОЛНОСТЬЮ, разбив на короткие
+смысловые сегменты (2-15 секунд), и для каждого сегмента предположи, кто
+говорит: учитель или ученик.
+
+Ориентируйся на роль в диалоге, а не на громкость: учитель обычно ведёт урок,
+задаёт вопросы, даёт инструкции, говорит развёрнуто и связно. Ученики обычно
+отвечают, часто короче, реже инициируют тему.
+
+Верни ТОЛЬКО валидный JSON-массив, без markdown, без пояснений вне JSON.
+Каждый элемент массива должен иметь такую форму:
+{"start_sec": <число>, "end_sec": <число>, "text": "точный текст реплики", "speaker_role": "teacher" | "student"}
+
+Правила:
+- Таймкоды - числа с плавающей точкой в секундах от начала ЭТОГО аудиофайла.
+- Сохраняй исходный язык речи как есть - не переводи.
+- Если не уверены, кто говорит - ставьте наиболее вероятный вариант по контексту, не пропускайте поле.
+- Если фрагмент неразборчив - пропусти его, не выдумывай текст.
+"""
+
 
 def _clean_json_text(text: str) -> str:
     return re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
 
 
-def transcribe_track(audio_path: str) -> list[Segment]:
+def transcribe_track(audio_path: str, identify_speakers: bool = False) -> list[Segment]:
     """
     Загружает аудиофайл через Gemini Files API (работает для файлов любого
     разумного размера, в т.ч. > 20MB, что типично для 40-минутного трека)
     и просит модель вернуть JSON-транскрипт с таймкодами в секундах.
+
+    identify_speakers=True - используется в single-track режиме (нет
+    отдельного трека класса): модель дополнительно пытается угадать
+    teacher/student по содержанию речи (см. TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT).
+    В обычном two-track режиме не нужно - там роль определяется надёжнее,
+    через align.py.
     """
     client = _get_client()
 
@@ -128,9 +162,11 @@ def transcribe_track(audio_path: str) -> list[Segment]:
     finally:
         os.remove(safe_path)
 
+    prompt = TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT if identify_speakers else TRANSCRIBE_PROMPT
+
     response = client.models.generate_content(
         model=MODEL,
-        contents=[TRANSCRIBE_PROMPT, uploaded_file],
+        contents=[prompt, uploaded_file],
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
 
@@ -145,7 +181,12 @@ def transcribe_track(audio_path: str) -> list[Segment]:
         ) from e
 
     segments = [
-        Segment(start=float(s["start_sec"]), end=float(s["end_sec"]), text=s["text"].strip())
+        Segment(
+            start=float(s["start_sec"]),
+            end=float(s["end_sec"]),
+            text=s["text"].strip(),
+            speaker_hint=s.get("speaker_role"),  # None если identify_speakers=False - поля нет в ответе
+        )
         for s in raw_segments
         if s.get("text", "").strip()
     ]
