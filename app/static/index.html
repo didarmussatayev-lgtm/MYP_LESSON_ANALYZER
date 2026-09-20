@@ -32,8 +32,9 @@
   <label>Трек учителя (петличка)</label>
   <input type="file" name="teacher_track" accept="audio/*" required>
 
-  <label>Общий трек класса (телефон в центре)</label>
-  <input type="file" name="classroom_track" accept="audio/*" required>
+  <label>Общий трек класса (телефон в центре) — опционально</label>
+  <input type="file" name="classroom_track" accept="audio/*">
+  <p class="note">Без этого трека анализ пойдёт только по словам учителя: talk-time покажет 100% учитель по построению, inquiry-level и ATL-evidence будут менее надёжны (см. методологическую заметку в готовом отчёте).</p>
 
   <label>Слайды (pptx, опционально)</label>
   <input type="file" name="pptx" accept=".pptx">
