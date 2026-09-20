@@ -75,6 +75,34 @@ def align_tracks(
     return utterances
 
 
+def align_single_track(segments: list[Segment]) -> list[Utterance]:
+    """
+    Используется, когда есть только ОДИН аудиотрек (см. чат: петличка, на
+    которой слышны и ученики). В отличие от align_tracks(), здесь нет
+    физического способа отличить учителя от учеников (нет второго трека для
+    сравнения по времени) - роль берётся из Segment.speaker_hint, который
+    Gemini проставляет по смыслу речи при identify_speakers=True (см.
+    gemini_transcribe.py). Это смысловая эвристика модели, не акустический
+    анализ голоса - заметно менее надёжно, чем align_tracks().
+
+    Сегменты без speaker_hint (например, если вызвали без identify_speakers)
+    по умолчанию считаются Teacher - тот же fallback, что и раньше, но
+    теперь как явный запасной вариант, а не единственная логика.
+    """
+    utterances = [
+        Utterance(
+            start=seg.start,
+            end=seg.end,
+            speaker="Student" if seg.speaker_hint == "student" else "Teacher",
+            text=seg.text,
+            source="lapel",
+        )
+        for seg in segments
+    ]
+    utterances.sort(key=lambda u: u.start)
+    return utterances
+
+
 def talk_time_summary(utterances: list[Utterance]) -> dict:
     teacher_time = sum(u.end - u.start for u in utterances if u.speaker == "Teacher")
     student_time = sum(u.end - u.start for u in utterances if u.speaker == "Student")
