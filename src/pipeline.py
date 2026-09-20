@@ -49,7 +49,7 @@ def _load_json(path: Path):
 
 def run_pipeline(
     teacher_track: str,
-    classroom_track: str,
+    classroom_track: str | None,
     planned_lesson_path: str,
     out_path: str,
     pptx_path: str | None = None,
@@ -64,6 +64,8 @@ def run_pipeline(
         if on_progress:
             on_progress(msg)
 
+    single_track_mode = classroom_track is None
+
     workdir_p = Path(workdir)
     workdir_p.mkdir(parents=True, exist_ok=True)
 
@@ -72,9 +74,12 @@ def run_pipeline(
     with open(planned_lesson_path, encoding="utf-8") as f:
         planned = yaml.safe_load(f)
 
-    # --- Stage 1: sync ---
+    # --- Stage 1: sync (только если есть второй трек) ---
     offset_path = _stage_path(workdir_p, "01_offset")
-    if resume and offset_path.exists():
+    if single_track_mode:
+        offset = 0.0
+        progress("Этап 1/7: только трек учителя - синхронизация не нужна, пропускаю.")
+    elif resume and offset_path.exists():
         offset = _load_json(offset_path)["offset_seconds"]
         progress(f"[resume] offset = {offset:.2f}s")
     else:
@@ -86,24 +91,37 @@ def run_pipeline(
     # --- Stage 2: transcribe (Gemini) ---
     teacher_segs_path = _stage_path(workdir_p, "02_teacher_segments")
     classroom_segs_path = _stage_path(workdir_p, "02_classroom_segments")
-    if resume and teacher_segs_path.exists() and classroom_segs_path.exists():
+    if resume and teacher_segs_path.exists() and (single_track_mode or classroom_segs_path.exists()):
         teacher_segments = [Segment(**s) for s in _load_json(teacher_segs_path)]
-        classroom_segments = [Segment(**s) for s in _load_json(classroom_segs_path)]
+        classroom_segments = (
+            [] if single_track_mode else [Segment(**s) for s in _load_json(classroom_segs_path)]
+        )
         progress("[resume] loaded transcripts")
     else:
-        progress("Этап 2/7: транскрипция трека учителя (Gemini)...")
-        teacher_segments = transcribe.transcribe_track(teacher_track)
-        transcribe.save_segments(teacher_segments, str(teacher_segs_path))
+        if single_track_mode:
+            progress("Этап 2/7: транскрипция трека учителя + попытка различить учитель/ученик по смыслу речи (Gemini)...")
+            teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True)
+            transcribe.save_segments(teacher_segments, str(teacher_segs_path))
+            classroom_segments = []
+            progress("Этап 3/7: общего трека нет - пропускаю.")
+        else:
+            progress("Этап 2/7: транскрипция трека учителя (Gemini)...")
+            teacher_segments = transcribe.transcribe_track(teacher_track)
+            transcribe.save_segments(teacher_segments, str(teacher_segs_path))
 
-        progress("Этап 3/7: транскрипция общего трека класса (Gemini)...")
-        classroom_segments = transcribe.transcribe_track(classroom_track)
-        transcribe.save_segments(classroom_segments, str(classroom_segs_path))
+            progress("Этап 3/7: транскрипция общего трека класса (Gemini)...")
+            classroom_segments = transcribe.transcribe_track(classroom_track)
+            transcribe.save_segments(classroom_segments, str(classroom_segs_path))
 
-    # --- Stage 3: align (Teacher/Student roles by timestamp) ---
+    # --- Stage 3: align (Teacher/Student roles) ---
     utterances_path = _stage_path(workdir_p, "03_utterances")
     if resume and utterances_path.exists():
         utterances = [Utterance(**u) for u in _load_json(utterances_path)]
         progress("[resume] loaded aligned utterances")
+    elif single_track_mode:
+        progress("Этап 4/7: разметка ролей по смысловой подсказке модели (без физического разделения треков)...")
+        utterances = align.align_single_track(teacher_segments)
+        align.save_utterances(utterances, str(utterances_path))
     else:
         progress("Этап 4/7: слияние треков по таймкодам (без ML-диаризации)...")
         utterances = align.align_tracks(teacher_segments, classroom_segments, classroom_offset_seconds=offset)
@@ -111,6 +129,13 @@ def run_pipeline(
 
     talk_time = align.talk_time_summary(utterances)
     progress(f"  Talk time: Teacher {talk_time['teacher_pct']}% / Student {talk_time['student_pct']}%")
+    if single_track_mode:
+        progress(
+            "  Внимание: роли Teacher/Student в single-track режиме определены моделью по "
+            "смыслу речи (кто ведёт урок vs кто отвечает), а не физическим сравнением двух "
+            "треков - точность ниже, особенно при одновременной речи или тихих репликах "
+            "учеников. См. методологическую заметку в отчёте."
+        )
 
     # --- Stage 3b (optional): slides ---
     intended_vs_enacted_summary = ""
@@ -173,6 +198,7 @@ def run_pipeline(
         alignment_rows=alignment_rows,
         reflection=reflection,
         intended_vs_enacted_summary=intended_vs_enacted_summary,
+        single_track_mode=single_track_mode,
     )
     report.render_report(ctx, template_path, out_path)
     progress(f"Готово. Отчёт сохранён: {out_path}")
@@ -182,7 +208,7 @@ def run_pipeline(
 def main() -> None:
     parser = argparse.ArgumentParser(description="MYP AI-assisted lesson observation pipeline")
     parser.add_argument("--teacher-track", required=True, help="Path to lapel mic audio (teacher)")
-    parser.add_argument("--classroom-track", required=True, help="Path to classroom phone audio")
+    parser.add_argument("--classroom-track", default=None, help="Path to classroom phone audio (опционально - без него анализ идёт только по треку учителя)")
     parser.add_argument("--planned-lesson", required=True, help="Path to planned lesson YAML")
     parser.add_argument("--pptx", default=None, help="Optional path to teacher's slides (pptx)")
     parser.add_argument("--out", default="report.docx", help="Output docx path")
