@@ -61,6 +61,7 @@ def build_context(
     reflection: dict,
     intended_vs_enacted_summary: str = "",
     methodology_notes: str | None = None,
+    single_track_mode: bool = False,
 ) -> dict:
     """Собирает единый context-словарь под docxtpl из результатов всех модулей."""
 
@@ -94,6 +95,18 @@ def build_context(
             "match. All AI classifications (question category, inquiry level, alignment rating) "
             "should be reviewed by the teacher before being used for coaching conversations."
         )
+        if single_track_mode:
+            methodology_notes += (
+                " IMPORTANT: this report was generated from the TEACHER'S TRACK ONLY (no "
+                "separate classroom-mic track was provided). Speaker roles (Teacher/Student) "
+                "were guessed by the AI from the content and tone of speech within this single "
+                "track (who leads the lesson vs who gives short answers), not from a physical "
+                "comparison of two independent recordings - this is a semantic heuristic, not "
+                "voice/acoustic identification, and is meaningfully less reliable than two-track "
+                "mode, especially for overlapping speech, quiet student voices, or short replies "
+                "with ambiguous context. Treat talk-time, question attribution, and inquiry-level "
+                "in this report as lower-confidence than a two-track report."
+            )
 
     return {
         "teacher_name": teacher_name,
