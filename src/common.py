@@ -12,6 +12,12 @@ class Segment:
     start: float
     end: float
     text: str
+    # Заполняется только в single-track режиме (см. gemini_transcribe.py,
+    # identify_speakers=True) - предположение модели "teacher"/"student" по
+    # содержанию и тону речи внутри одного файла, а не акустический анализ
+    # голоса. В two-track режиме остаётся None - там роль определяется
+    # надёжнее, через физическое сравнение двух треков (align.py).
+    speaker_hint: str | None = None
 
 
 @dataclass
