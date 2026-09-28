@@ -62,6 +62,7 @@ def build_context(
     intended_vs_enacted_summary: str = "",
     methodology_notes: str | None = None,
     single_track_mode: bool = False,
+    audio_observability_note: str | None = None,
 ) -> dict:
     """Собирает единый context-словарь под docxtpl из результатов всех модулей."""
 
@@ -92,8 +93,12 @@ def build_context(
             "two independently transcribed audio tracks, not from voice-based diarization. "
             "Overlapping speech (teacher talking over a student) may be misclassified. "
             "Slide-to-timestamp mapping (if used) is a text-similarity estimate, not an exact "
-            "match. All AI classifications (question category, inquiry level, alignment rating) "
-            "should be reviewed by the teacher before being used for coaching conversations."
+            "match. Student talk-time includes silence not covered by either speaker's speech, "
+            "attributed to independent/group work - this is an ASSUMPTION, not a measurement; "
+            "see talk_time.student_speech_seconds for the actually-measured student speech "
+            "duration alone. All AI classifications (question category, inquiry level, "
+            "alignment rating) should be reviewed by the teacher before being used for "
+            "coaching conversations."
         )
         if single_track_mode:
             methodology_notes += (
@@ -107,6 +112,8 @@ def build_context(
                 "with ambiguous context. Treat talk-time, question attribution, and inquiry-level "
                 "in this report as lower-confidence than a two-track report."
             )
+        if audio_observability_note:
+            methodology_notes += " SUBJECT-SPECIFIC LIMITATION: " + audio_observability_note
 
     return {
         "teacher_name": teacher_name,
