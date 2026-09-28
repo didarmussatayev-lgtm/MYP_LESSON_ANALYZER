@@ -43,6 +43,7 @@ OUTPUT_DIR = APP_DIR / "output"
 WORK_DIR = APP_DIR / "work"
 TEMPLATE_PATH = BASE_DIR / "templates" / "lesson_report_template.docx"
 TAXONOMY_PATH = BASE_DIR / "config" / "taxonomy.yaml"
+SUBJECT_FRAMEWORKS_PATH = BASE_DIR / "config" / "subject_frameworks.yaml"
 
 for d in (UPLOADS_DIR, OUTPUT_DIR, WORK_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -80,7 +81,14 @@ def _safe_filename(original_name: str) -> str:
     return f"{uuid.uuid4().hex}{safe_ext}"
 
 
-def _run_job(job_id: str, teacher_path: Path, classroom_path: Path | None, planned_path: Path, pptx_path: Path | None) -> None:
+def _run_job(
+    job_id: str,
+    teacher_path: Path,
+    classroom_path: Path | None,
+    planned_path: Path,
+    pptx_path: Path | None,
+    subject_key: str | None,
+) -> None:
     job = JOBS[job_id]
     job.status = "running"
 
@@ -98,6 +106,8 @@ def _run_job(job_id: str, teacher_path: Path, classroom_path: Path | None, plann
             workdir=str(WORK_DIR / job_id),
             taxonomy_path=str(TAXONOMY_PATH),
             template_path=str(TEMPLATE_PATH),
+            subject_frameworks_path=str(SUBJECT_FRAMEWORKS_PATH),
+            subject_key=subject_key or None,
             on_progress=on_progress,
         )
         job.report_path = str(out_path)
@@ -119,6 +129,29 @@ async def index() -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/api/form-options")
+async def get_form_options() -> dict:
+    """
+    Данные для выпадающих списков формы: универсальные MYP key concepts /
+    global contexts / learner profile, предметные related concepts и
+    assessment criteria (config/subject_frameworks.yaml), кластеры ATL
+    skills (config/taxonomy.yaml) - единый источник правды с бэкендом,
+    чтобы форма и LLM-промпты не расходились в терминологии.
+    """
+    with open(SUBJECT_FRAMEWORKS_PATH, encoding="utf-8") as f:
+        frameworks = yaml.safe_load(f)
+    with open(TAXONOMY_PATH, encoding="utf-8") as f:
+        taxonomy = yaml.safe_load(f)
+
+    return {
+        "key_concepts": frameworks["key_concepts"],
+        "global_contexts": frameworks["global_contexts"],
+        "learner_profile_attributes": frameworks["learner_profile_attributes"],
+        "subjects": frameworks["subjects"],
+        "atl_skill_clusters": taxonomy["atl_skill_clusters"],
+    }
+
+
 @app.post("/jobs")
 async def create_job(
     teacher_track: UploadFile = File(...),
@@ -126,6 +159,7 @@ async def create_job(
     pptx: UploadFile | None = File(None),
     teacher_name: str = Form(""),
     subject: str = Form(""),
+    subject_key: str = Form(""),
     lesson_date: str = Form(""),
     key_concept: str = Form(""),
     related_concept: str = Form(""),
@@ -178,7 +212,7 @@ async def create_job(
         yaml.safe_dump(planned, f, allow_unicode=True)
 
     JOBS[job_id] = Job(id=job_id)
-    executor.submit(_run_job, job_id, teacher_path, classroom_path, planned_path, pptx_path)
+    executor.submit(_run_job, job_id, teacher_path, classroom_path, planned_path, pptx_path, subject_key)
 
     return {"job_id": job_id}
 
