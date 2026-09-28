@@ -192,6 +192,71 @@ def planned_vs_observed(
 # Блок 4: синтез рефлексии
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Блок 3.2: intended vs enacted pedagogy
+# ---------------------------------------------------------------------------
+
+def summarize_intended_vs_enacted(
+    planned: dict,
+    talk_time: dict,
+    questions: list[dict],
+    inquiry_episodes: list[dict],
+) -> str:
+    """
+    В отличие от planned_vs_observed (10 пунктов unit planner - фактическая
+    информация), этот вызов сравнивает ЗАЯВЛЕННЫЙ педагогический подход
+    (learning_experiences, ATL skills из плана - что учитель собирался делать
+    методически) с ФАКТИЧЕСКИ реализованной педагогикой (распределение
+    inquiry-level по эпизодам, распределение категорий вопросов, talk-time).
+
+    Возвращает готовый текстовый абзац (не JSON-структуру) для прямой
+    вставки в отчёт.
+    """
+    system_prompt = """Ты — ассистент для педагогического анализа уроков по методике IB MYP.
+Тебе даны: заявленный в плане урока педагогический подход (learning_experiences,
+atl_skills - что учитель собирался делать методически) и фактические данные о
+том, что происходило на уроке (talk-time, распределение категорий вопросов,
+распределение inquiry-level по эпизодам урока).
+
+Напиши ОДИН связный абзац (3-5 предложений) на английском, сравнивающий
+заявленный подход с тем, что реально наблюдалось. Будь конкретен - ссылайся
+на цифры и категории из данных, а не пиши общими фразами. Если заявленный
+подход и наблюдаемая практика расходятся - прямо это отметь. Если план не
+даёт достаточно информации, чтобы судить о заявленном педагогическом
+подходе - честно напиши, что сравнение ограничено из-за недостатка деталей
+в плане, а не выдумывай.
+
+Верни ТОЛЬКО валидный JSON без markdown: {"summary": "..."}"""
+
+    inquiry_level_counts: dict[str, int] = {}
+    for ep in inquiry_episodes:
+        lvl = ep.get("level", "unknown")
+        inquiry_level_counts[lvl] = inquiry_level_counts.get(lvl, 0) + 1
+
+    question_category_counts: dict[str, int] = {}
+    for q in questions:
+        cat = q.get("category", "unknown")
+        question_category_counts[cat] = question_category_counts.get(cat, 0) + 1
+
+    user_prompt = json.dumps(
+        {
+            "planned_learning_experiences": planned.get("learning_experiences", ""),
+            "planned_atl_skills": planned.get("atl_skills", ""),
+            "planned_learning_objectives": planned.get("learning_objectives", ""),
+            "observed_talk_time": talk_time,
+            "observed_question_category_counts": question_category_counts,
+            "observed_inquiry_level_counts": inquiry_level_counts,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    result = _call_gemini_json(system_prompt, user_prompt)
+    if isinstance(result, dict):
+        return result.get("summary", "")
+    return ""
+
+
 def synthesize_reflection(
     talk_time: dict,
     question_stats: list[dict],
