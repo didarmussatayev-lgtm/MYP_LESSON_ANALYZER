@@ -57,6 +57,8 @@ def run_pipeline(
     resume: bool = False,
     taxonomy_path: str = "../config/taxonomy.yaml",
     template_path: str = "../templates/lesson_report_template.docx",
+    subject_frameworks_path: str = "../config/subject_frameworks.yaml",
+    subject_key: str | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> None:
     def progress(msg: str) -> None:
@@ -70,6 +72,13 @@ def run_pipeline(
     workdir_p.mkdir(parents=True, exist_ok=True)
 
     taxonomy = la._load_taxonomy(taxonomy_path)
+
+    audio_observability_note = None
+    if subject_key:
+        with open(subject_frameworks_path, encoding="utf-8") as f:
+            subject_frameworks = yaml.safe_load(f)
+        subject_def = subject_frameworks.get("subjects", {}).get(subject_key, {})
+        audio_observability_note = subject_def.get("audio_observability_note_en") or subject_def.get("audio_observability_note")
 
     with open(planned_lesson_path, encoding="utf-8") as f:
         planned = yaml.safe_load(f)
@@ -87,6 +96,17 @@ def run_pipeline(
         offset = sync.find_offset_seconds(teacher_track, classroom_track)
         _save_json(offset_path, {"offset_seconds": offset})
         progress(f"  offset = {offset:.2f}s")
+
+    # Полная длительность урока - нужна для talk-time (проценты от всей
+    # записи, а не только от суммарного времени речи, см. align.py).
+    teacher_duration = sync.get_audio_duration_seconds(teacher_track)
+    if single_track_mode:
+        total_duration = teacher_duration
+    else:
+        classroom_duration = sync.get_audio_duration_seconds(classroom_track)
+        # classroom-трек уже сдвинут на offset относительно teacher-трека,
+        # поэтому его "конец" на общей шкале = classroom_duration + offset.
+        total_duration = max(teacher_duration, classroom_duration + offset)
 
     # --- Stage 2: transcribe (Gemini) ---
     teacher_segs_path = _stage_path(workdir_p, "02_teacher_segments")
@@ -127,8 +147,12 @@ def run_pipeline(
         utterances = align.align_tracks(teacher_segments, classroom_segments, classroom_offset_seconds=offset)
         align.save_utterances(utterances, str(utterances_path))
 
-    talk_time = align.talk_time_summary(utterances)
-    progress(f"  Talk time: Teacher {talk_time['teacher_pct']}% / Student {talk_time['student_pct']}%")
+    talk_time = align.talk_time_summary(utterances, total_duration_seconds=total_duration)
+    progress(
+        f"  Talk time: Teacher {talk_time['teacher_pct']}% / Student {talk_time['student_pct']}% "
+        f"(из них реальная речь ученика: {talk_time['student_speech_seconds']}с, "
+        f"остальное - тишина, приписанная самостоятельной/групповой работе)"
+    )
     if single_track_mode:
         progress(
             "  Внимание: роли Teacher/Student в single-track режиме определены моделью по "
@@ -138,7 +162,6 @@ def run_pipeline(
         )
 
     # --- Stage 3b (optional): slides ---
-    intended_vs_enacted_summary = ""
     if pptx_path:
         import slides as slides_mod
 
@@ -186,6 +209,17 @@ def run_pipeline(
         reflection = la.synthesize_reflection(talk_time, questions, inquiry_episodes, alignment_rows)
         _save_json(reflection_path, reflection)
 
+    intended_summary_path = _stage_path(workdir_p, "08_intended_vs_enacted")
+    if resume and intended_summary_path.exists():
+        intended_vs_enacted_summary = _load_json(intended_summary_path)["summary"]
+        progress("[resume] loaded intended-vs-enacted summary")
+    else:
+        progress("Сравнение intended vs enacted pedagogy (Gemini)...")
+        intended_vs_enacted_summary = la.summarize_intended_vs_enacted(
+            planned, talk_time, questions, inquiry_episodes
+        )
+        _save_json(intended_summary_path, {"summary": intended_vs_enacted_summary})
+
     # --- Final: render docx ---
     progress("Генерация Word-отчёта...")
     ctx = report.build_context(
@@ -199,6 +233,7 @@ def run_pipeline(
         reflection=reflection,
         intended_vs_enacted_summary=intended_vs_enacted_summary,
         single_track_mode=single_track_mode,
+        audio_observability_note=audio_observability_note,
     )
     report.render_report(ctx, template_path, out_path)
     progress(f"Готово. Отчёт сохранён: {out_path}")
