@@ -103,23 +103,51 @@ def align_single_track(segments: list[Segment]) -> list[Utterance]:
     return utterances
 
 
-def talk_time_summary(utterances: list[Utterance]) -> dict:
+def talk_time_summary(utterances: list[Utterance], total_duration_seconds: float | None = None) -> dict:
+    """
+    total_duration_seconds - полная длительность урока (из sync.get_audio_duration_seconds).
+
+    Если передана: проценты считаются от длины ВСЕЙ записи, а не только от
+    суммарного времени речи. Тишина (время урока, не покрытое ни репликой
+    учителя, ни репликой ученика) трактуется как самостоятельная/групповая
+    работа учеников (см. обсуждение в чате) и приплюсовывается к
+    student-времени - ЭТО ДОПУЩЕНИЕ, не измерение: тишина может быть и
+    паузой, и оргмоментом, а не обязательно работой учеников. Поэтому в
+    результате отдельно возвращается student_speech_seconds (то, что
+    реально измерено по аудио) и student_seconds (речь + приписанная
+    тишина) - методолог должен видеть оба числа, а не только суммарное.
+
+    Если total_duration_seconds не передана (например, юнит-тест без
+    реального аудио) - старое поведение: проценты от суммы времени речи,
+    без учёта тишины.
+    """
     teacher_time = sum(u.end - u.start for u in utterances if u.speaker == "Teacher")
-    student_time = sum(u.end - u.start for u in utterances if u.speaker == "Student")
-    total = teacher_time + student_time or 1e-6
+    student_speech_time = sum(u.end - u.start for u in utterances if u.speaker == "Student")
 
     teacher_count = sum(1 for u in utterances if u.speaker == "Teacher")
     student_count = sum(1 for u in utterances if u.speaker == "Student")
 
+    if total_duration_seconds is not None:
+        silence_seconds = max(0.0, total_duration_seconds - teacher_time - student_speech_time)
+        student_attributed_time = student_speech_time + silence_seconds
+        total = total_duration_seconds or 1e-6
+    else:
+        silence_seconds = 0.0
+        student_attributed_time = student_speech_time
+        total = teacher_time + student_speech_time or 1e-6
+
     return {
         "teacher_seconds": round(teacher_time, 1),
-        "student_seconds": round(student_time, 1),
+        "student_speech_seconds": round(student_speech_time, 1),
+        "silence_attributed_to_student_seconds": round(silence_seconds, 1),
+        "student_seconds": round(student_attributed_time, 1),
         "teacher_pct": round(100 * teacher_time / total, 1),
-        "student_pct": round(100 * student_time / total, 1),
+        "student_pct": round(100 * student_attributed_time / total, 1),
+        "total_duration_seconds": round(total_duration_seconds, 1) if total_duration_seconds else None,
         "teacher_utterance_count": teacher_count,
         "student_utterance_count": student_count,
         "avg_teacher_utterance_len_sec": round(teacher_time / max(teacher_count, 1), 2),
-        "avg_student_utterance_len_sec": round(student_time / max(student_count, 1), 2),
+        "avg_student_utterance_len_sec": round(student_speech_time / max(student_count, 1), 2),
     }
 
 
