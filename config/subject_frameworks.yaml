@@ -1,0 +1,136 @@
+# Предметные рамки MYP для выпадающих списков в форме загрузки (app/static/index.html).
+# Извлечено из официальных гайдов IB (Sciences guide, updated April 2023;
+# Language acquisition guide, for use from September 2020/January 2021).
+#
+# key_concepts и global_contexts ОДИНАКОВЫ для всех предметов MYP - это
+# общая рамка программы, не предметная. related_concepts и
+# assessment_criteria - предметные, разные для каждого subject.
+#
+# Чтобы добавить новый предмет: скопировать блок под новым ключом в
+# subjects, заполнить related_concepts и assessment_criteria из
+# соответствующего guide, при необходимости добавить audio_observability_note
+# (см. language_acquisition - не все критерии наблюдаемы по аудио урока).
+
+key_concepts:
+  - Aesthetics
+  - Change
+  - Communication
+  - Communities
+  - Connections
+  - Creativity
+  - Culture
+  - Development
+  - Form
+  - Global interactions
+  - Identity
+  - Logic
+  - Perspective
+  - Relationships
+  - Systems
+  - Time, place and space
+
+global_contexts:
+  - Identities and relationships
+  - Personal and cultural expression
+  - Orientation in space and time
+  - Scientific and technical innovation
+  - Globalization and sustainability
+  - Fairness and development
+
+learner_profile_attributes:
+  - Inquirers
+  - Knowledgeable
+  - Thinkers
+  - Communicators
+  - Principled
+  - Open-minded
+  - Caring
+  - Risk-takers
+  - Balanced
+  - Reflective
+
+subjects:
+  sciences:
+    label: "Sciences"
+    # Sciences guide, Table 2a-2d - объединены disciplines (biology/chemistry/
+    # physics/integrated) в один список; учитель не ограничен этим списком.
+    related_concepts:
+      - Balance
+      - Conditions
+      - Consequences
+      - Energy
+      - Environment
+      - Evidence
+      - Form
+      - Function
+      - Interaction
+      - Models
+      - Movement
+      - Patterns
+      - Transfer
+      - Transformation
+    assessment_criteria:
+      - code: A
+        label: "Knowing and understanding"
+      - code: B
+        label: "Inquiring and designing"
+      - code: C
+        label: "Processing and evaluating"
+      - code: D
+        label: "Reflecting on the impacts of science"
+    audio_observability_note: null
+
+  language_acquisition:
+    label: "Language Acquisition"
+    # Language acquisition guide, Table 6 - объединены phases 1-2/3-4/5-6.
+    related_concepts:
+      - Audience
+      - Function
+      - Pronunciation
+      - Context
+      - Meaning
+      - Purpose
+      - Conventions
+      - Message
+      - Structure
+      - Form
+      - Patterns
+      - Word choice
+      - Point of view
+      - Idiom
+      - Empathy
+      - Argument
+      - Stylistic choices
+      - Bias
+      - Inference
+      - Theme
+      - Voice
+    assessment_criteria:
+      - code: A
+        label: "Listening"
+      - code: B
+        label: "Reading"
+      - code: C
+        label: "Speaking"
+      - code: D
+        label: "Writing"
+    # ВАЖНО: из аудиозаписи урока физически наблюдаемо в основном Criterion C
+    # (Speaking) и частично Criterion A (Listening, если на уроке звучит
+    # целевой язык, который слушают ученики). Criterion B (Reading) и D
+    # (Writing) не могут быть подтверждены аудио-транскриптом - это должно
+    # явно отражаться в methodology_notes отчёта, если выбран этот предмет.
+    audio_observability_note: >
+      Только Criterion C (Speaking) и частично Criterion A (Listening)
+      можно оценить по аудиозаписи урока. Criterion B (Reading) и
+      Criterion D (Writing) требуют письменных/читаемых артефактов урока
+      и не могут быть подтверждены транскриптом - alignment по этим
+      критериям в Блоке 1 будет "Not observed" по построению, а не
+      из-за реального отсутствия свидетельств.
+    # Английская версия - для вставки в docx-отчёт (отчёт на английском).
+    audio_observability_note_en: >
+      Only Criterion C (Speaking) and, partially, Criterion A (Listening) can
+      be assessed from a lesson audio recording. Criterion B (Reading) and
+      Criterion D (Writing) require written/readable lesson artefacts and
+      cannot be confirmed from a transcript - "Not observed" alignment for
+      these criteria in Block 1 reflects this limitation by construction,
+      not necessarily an actual absence of evidence.
