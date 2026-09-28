@@ -133,6 +133,8 @@ def build():
     metric_rows = [
         ("Talk time (%)", "{{ talk_time.teacher_pct }}%", "{{ talk_time.student_pct }}%"),
         ("Talk time (seconds)", "{{ talk_time.teacher_seconds }}", "{{ talk_time.student_seconds }}"),
+        ("  — of which measured speech (sec)", "", "{{ talk_time.student_speech_seconds }}"),
+        ("  — of which silence attributed to independent/group work (sec)", "", "{{ talk_time.silence_attributed_to_student_seconds }}"),
         ("Number of utterances", "{{ talk_time.teacher_utterance_count }}", "{{ talk_time.student_utterance_count }}"),
         (
             "Avg. utterance length (sec)",
@@ -149,7 +151,10 @@ def build():
     note2 = doc.add_paragraph()
     note2_run = note2.add_run(
         "Note: speaker roles are assigned via timestamp alignment between the lapel "
-        "track (teacher) and the classroom track, not via voice diarization. "
+        "track (teacher) and the classroom track, not via voice diarization. Student "
+        "talk-time (%) is calculated against the FULL lesson duration, not just spoken "
+        "time, and includes silence attributed to independent/group work - see the "
+        "measured-speech-only row above for the actual observed student speech. "
         "See methodology notes for limitations."
     )
     note2_run.italic = True
