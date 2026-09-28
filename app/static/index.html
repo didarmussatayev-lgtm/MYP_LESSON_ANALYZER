@@ -2,22 +2,27 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MYP Lesson Analyzer</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
   h1 { font-size: 22px; }
-  h2 { font-size: 16px; margin-top: 28px; color: #1F3864; }
-  label { display: block; margin-top: 10px; font-size: 13px; font-weight: 600; }
-  input[type=text], textarea { width: 100%; padding: 6px 8px; box-sizing: border-box; font-size: 14px; margin-top: 2px; }
-  textarea { min-height: 42px; }
+  h2 { font-size: 16px; margin-top: 28px; color: #1F3864; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  label.field { display: block; margin-top: 12px; font-size: 13px; font-weight: 600; }
+  input[type=text], textarea, select { width: 100%; padding: 6px 8px; box-sizing: border-box; font-size: 14px; margin-top: 2px; }
+  textarea { min-height: 52px; }
   input[type=file] { margin-top: 4px; }
   .row2 { display: flex; gap: 12px; }
   .row2 > div { flex: 1; }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; }
+  .checks label { font-size: 13px; font-weight: 400; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  .checks.cols label { min-width: 46%; }
   button { margin-top: 20px; padding: 10px 20px; background: #1F3864; color: white; border: none; border-radius: 4px; font-size: 15px; cursor: pointer; }
   button:disabled { background: #999; cursor: default; }
   #status { margin-top: 20px; padding: 12px; background: #f2f2f2; border-radius: 4px; font-size: 13px; white-space: pre-wrap; display: none; }
   #status.visible { display: block; }
   .note { font-size: 12px; color: #666; margin-top: 4px; }
+  .warn { font-size: 12px; color: #8a4b00; background: #fff4e0; border: 1px solid #f0d6a8; border-radius: 4px; padding: 8px; margin-top: 8px; display: none; }
   #downloadLink { display: none; margin-top: 12px; }
 </style>
 </head>
@@ -29,37 +34,71 @@
 <form id="lessonForm">
 
   <h2>Аудиозаписи</h2>
-  <label>Трек учителя (петличка)</label>
+  <label class="field">Трек учителя (петличка)</label>
   <input type="file" name="teacher_track" accept="audio/*" required>
 
-  <label>Общий трек класса (телефон в центре) — опционально</label>
+  <label class="field">Общий трек класса (телефон в центре) — опционально</label>
   <input type="file" name="classroom_track" accept="audio/*">
-  <p class="note">Без этого трека анализ пойдёт только по словам учителя: talk-time покажет 100% учитель по построению, inquiry-level и ATL-evidence будут менее надёжны (см. методологическую заметку в готовом отчёте).</p>
+  <p class="note">Без этого трека роли учитель/ученик определяются моделью по смыслу речи (менее надёжно, чем при двух треках) — см. методологическую заметку в отчёте.</p>
 
-  <label>Слайды (pptx, опционально)</label>
+  <label class="field">Слайды (pptx, опционально)</label>
   <input type="file" name="pptx" accept=".pptx">
 
   <h2>Основные данные</h2>
   <div class="row2">
-    <div><label>Учитель</label><input type="text" name="teacher_name"></div>
-    <div><label>Предмет</label><input type="text" name="subject"></div>
+    <div><label class="field">Учитель</label><input type="text" name="teacher_name"></div>
+    <div><label class="field">Курс (например Biology, Spanish)</label><input type="text" name="subject"></div>
   </div>
-  <label>Дата урока</label>
-  <input type="text" name="lesson_date" placeholder="2026-08-20">
+  <div class="row2">
+    <div>
+      <label class="field">Предметная группа MYP</label>
+      <select name="subject_key" id="subjectKey" required></select>
+    </div>
+    <div>
+      <label class="field">Дата урока</label>
+      <input type="text" name="lesson_date" placeholder="2026-09-20">
+    </div>
+  </div>
+  <div id="observabilityWarn" class="warn"></div>
 
   <h2>Планирование урока (unit planner)</h2>
-  <p class="note">Это "planned"-сторона отчёта — без неё Блок 1 (planned vs observed) будет пустым.</p>
+  <p class="note">Это "planned"-сторона отчёта — без неё Блок 1 (planned vs observed) будет пустым. Всё, что можно выбрать из списка, выбирается кликом.</p>
 
-  <label>Key Concept</label><textarea name="key_concept"></textarea>
-  <label>Related Concept(s)</label><textarea name="related_concept"></textarea>
-  <label>Global Context</label><textarea name="global_context"></textarea>
-  <label>Statement of Inquiry</label><textarea name="statement_of_inquiry"></textarea>
-  <label>Inquiry Questions</label><textarea name="inquiry_questions"></textarea>
-  <label>Learning Objectives</label><textarea name="learning_objectives"></textarea>
-  <label>ATL Skills</label><textarea name="atl_skills"></textarea>
-  <label>Learner Profile</label><textarea name="learner_profile"></textarea>
-  <label>Assessment Criteria</label><textarea name="assessment_criteria"></textarea>
-  <label>Learning Experiences</label><textarea name="learning_experiences"></textarea>
+  <div class="row2">
+    <div>
+      <label class="field">Key Concept</label>
+      <select name="key_concept" id="keyConcept"></select>
+    </div>
+    <div>
+      <label class="field">Global Context</label>
+      <select name="global_context" id="globalContext"></select>
+    </div>
+  </div>
+
+  <label class="field">Related Concept(s)</label>
+  <div class="checks cols" id="relatedConcepts"></div>
+
+  <label class="field">Statement of Inquiry</label>
+  <textarea name="statement_of_inquiry"></textarea>
+
+  <label class="field">Inquiry Questions</label>
+  <textarea name="inquiry_questions" placeholder="Factual / Conceptual / Debatable"></textarea>
+
+  <label class="field">Learning Objectives</label>
+  <textarea name="learning_objectives"></textarea>
+
+  <label class="field">Assessment Criteria</label>
+  <div class="checks" id="assessmentCriteria"></div>
+
+  <label class="field">ATL Skills</label>
+  <div class="checks" id="atlSkills"></div>
+  <textarea name="atl_skills_detail" placeholder="Уточнение (опционально): какой именно навык, например 'critical thinking — сравнение доказательств'"></textarea>
+
+  <label class="field">Learner Profile</label>
+  <div class="checks cols" id="learnerProfile"></div>
+
+  <label class="field">Learning Experiences</label>
+  <textarea name="learning_experiences"></textarea>
 
   <button type="submit" id="submitBtn">Загрузить и обработать</button>
 </form>
@@ -73,6 +112,70 @@ const statusDiv = document.getElementById('status');
 const submitBtn = document.getElementById('submitBtn');
 const downloadLink = document.getElementById('downloadLink');
 
+let OPTIONS = null;
+
+function fillSelect(el, items) {
+  el.innerHTML = '<option value="">— выбрать —</option>' +
+    items.map(v => `<option value="${v}">${v}</option>`).join('');
+}
+
+function fillChecks(el, groupName, items, titleFn) {
+  el.innerHTML = items.map(item => {
+    const value = typeof item === 'string' ? item : item.value;
+    const label = typeof item === 'string' ? item : item.label;
+    const title = titleFn ? titleFn(item) : '';
+    return `<label title="${title}"><input type="checkbox" data-group="${groupName}" value="${value}"> ${label}</label>`;
+  }).join('');
+}
+
+function checkedValues(groupName) {
+  return [...document.querySelectorAll(`input[data-group="${groupName}"]:checked`)].map(i => i.value);
+}
+
+function refreshSubjectDependent() {
+  const key = document.getElementById('subjectKey').value;
+  const subj = OPTIONS.subjects[key];
+  if (!subj) return;
+
+  fillChecks(document.getElementById('relatedConcepts'), 'related', subj.related_concepts);
+
+  fillChecks(
+    document.getElementById('assessmentCriteria'), 'criteria',
+    subj.assessment_criteria.map(c => ({ value: `Criterion ${c.code}: ${c.label}`, label: `${c.code} — ${c.label}` }))
+  );
+
+  const warn = document.getElementById('observabilityWarn');
+  if (subj.audio_observability_note) {
+    warn.textContent = '⚠ ' + subj.audio_observability_note.trim();
+    warn.style.display = 'block';
+  } else {
+    warn.style.display = 'none';
+  }
+}
+
+async function init() {
+  const res = await fetch('/api/form-options');
+  OPTIONS = await res.json();
+
+  const subjSel = document.getElementById('subjectKey');
+  subjSel.innerHTML = Object.entries(OPTIONS.subjects)
+    .map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+  subjSel.addEventListener('change', refreshSubjectDependent);
+
+  fillSelect(document.getElementById('keyConcept'), OPTIONS.key_concepts);
+  fillSelect(document.getElementById('globalContext'), OPTIONS.global_contexts);
+  fillChecks(document.getElementById('learnerProfile'), 'learner', OPTIONS.learner_profile_attributes);
+
+  fillChecks(
+    document.getElementById('atlSkills'), 'atl',
+    Object.values(OPTIONS.atl_skill_clusters).map(c => c.label),
+    null
+  );
+
+  refreshSubjectDependent();
+}
+init();
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   submitBtn.disabled = true;
@@ -82,15 +185,26 @@ form.addEventListener('submit', async (e) => {
 
   const formData = new FormData(form);
 
+  // Чекбоксы собираются в строки - бэкенд принимает обычные строковые поля.
+  formData.set('related_concept', checkedValues('related').join('; '));
+  formData.set('assessment_criteria', checkedValues('criteria').join('; '));
+  formData.set('learner_profile', checkedValues('learner').join(', '));
+  const atlChecked = checkedValues('atl').join(', ');
+  const atlDetail = (formData.get('atl_skills_detail') || '').toString().trim();
+  formData.set('atl_skills', atlDetail ? `${atlChecked} — ${atlDetail}` : atlChecked);
+  formData.delete('atl_skills_detail');
+
+  // Пустой файл classroom_track не отправляем вовсе.
+  const cls = formData.get('classroom_track');
+  if (cls && cls.size === 0) formData.delete('classroom_track');
+  const pp = formData.get('pptx');
+  if (pp && pp.size === 0) formData.delete('pptx');
+
   let jobId;
   try {
     const res = await fetch('/jobs', { method: 'POST', body: formData });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(errText);
-    }
-    const data = await res.json();
-    jobId = data.job_id;
+    if (!res.ok) throw new Error(await res.text());
+    jobId = (await res.json()).job_id;
   } catch (err) {
     statusDiv.textContent = 'Ошибка загрузки: ' + err.message;
     submitBtn.disabled = false;
@@ -101,8 +215,13 @@ form.addEventListener('submit', async (e) => {
 
   const poll = setInterval(async () => {
     const res = await fetch('/jobs/' + jobId);
+    if (res.status === 404) {
+      clearInterval(poll);
+      submitBtn.disabled = false;
+      statusDiv.textContent += '\n\nЗадача не найдена (сервер мог перезапуститься). Попробуйте загрузить заново.';
+      return;
+    }
     const data = await res.json();
-
     statusDiv.textContent = 'Статус: ' + data.status + '\n\n' + data.progress_log.join('\n');
 
     if (data.status === 'done') {
