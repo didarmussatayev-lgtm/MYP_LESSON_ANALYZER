@@ -113,6 +113,7 @@ function initials(name, email) {
   const parts = src.split(/\s+/).filter(Boolean);
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
 }
+function toRoman(n) { return ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii'][n] || String(n); }
 function plural(n, one, few, many) {
   const m10 = n % 10, m100 = n % 100;
   if (m10 === 1 && m100 !== 11) return one;
@@ -516,7 +517,7 @@ function chipGroup(group, items) {
 
 async function viewNewLesson() {
   const o = await loadOptions();
-  const subjectOptions = Object.entries(o.subjects).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)}</option>`).join('');
+  const subjectOptions = Object.entries(o.subjects).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label_ru ? `${v.label_ru} · ${v.label}` : v.label)}</option>`).join('');
   const sel = (name, items) => `<select class="select" id="${name}" name="${name}"><option value="">Не выбрано</option>${items.map(v => `<option>${esc(v)}</option>`).join('')}</select>`;
 
   renderShell('new', `
@@ -555,7 +556,7 @@ async function viewNewLesson() {
           <div class="form-section-head"><span class="step-no">03</span><h2>План урока</h2>
             <p>Из unit planner. С этими полями отчёт сравнит запланированное с тем, что реально прозвучало на уроке. Можно заполнить частично.</p></div>
           <div class="form-grid">
-            <div class="field"><label for="key_concept">Key concept</label>${sel('key_concept', o.key_concepts)}</div>
+            <div class="field"><label for="key_concept">Key concept</label>${sel('key_concept', o.key_concepts)}<span class="help" id="kcHint"></span></div>
             <div class="field"><label for="global_context">Global context</label>${sel('global_context', o.global_contexts)}</div>
             <div class="field span-2"><span class="label">Related concepts</span><div id="relatedConcepts"></div></div>
             <div class="field span-2"><label for="statement_of_inquiry">Statement of inquiry</label><textarea class="textarea" id="statement_of_inquiry" name="statement_of_inquiry" rows="2"></textarea></div>
@@ -584,9 +585,32 @@ async function viewNewLesson() {
   function refreshSubject() {
     const subj = o.subjects[$('#subject_key').value];
     if (!subj) return;
-    $('#relatedConcepts').innerHTML = chipGroup('related', subj.related_concepts);
-    $('#assessmentCriteria').innerHTML = chipGroup('criteria',
-      subj.assessment_criteria.map(c => ({ value: `Criterion ${c.code}: ${c.label}`, label: `${c.code} · ${c.label}` })));
+    const groups = subj.related_concept_groups;
+    if (groups) {
+      $('#relatedConcepts').innerHTML = `<div class="seg" role="group" aria-label="Дисциплина" id="rcGroups" style="margin-bottom:8px">
+          <button type="button" data-rcg="" aria-pressed="true">Все</button>
+          ${Object.keys(groups).map(g => `<button type="button" data-rcg="${esc(g)}" aria-pressed="false">${esc(g)}</button>`).join('')}
+        </div>${chipGroup('related', subj.related_concepts)}`;
+      $('#rcGroups').addEventListener('click', e => {
+        const b = e.target.closest('[data-rcg]'); if (!b) return;
+        $$('#rcGroups [data-rcg]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+        const allowed = b.dataset.rcg ? new Set(groups[b.dataset.rcg]) : null;
+        $$('#relatedConcepts .chip-check').forEach(ch => {
+          const inp = $('input', ch);
+          ch.hidden = !!allowed && !allowed.has(inp.value) && !inp.checked;
+        });
+      });
+    } else if (subj.related_concepts.length) {
+      $('#relatedConcepts').innerHTML = chipGroup('related', subj.related_concepts);
+    } else {
+      $('#relatedConcepts').innerHTML = `<p class="help">${esc(subj.related_concepts_note || 'Для этого предмета список не задан.')}</p>`;
+    }
+    $('#assessmentCriteria').innerHTML = `<div class="chips">${subj.assessment_criteria.map(c => {
+      const tip = `<b>${esc(c.code)} · ${esc(c.label)}</b>${(c.strands || []).map((st, i) => `<br>${toRoman(i + 1)}. ${esc(st)}`).join('')}${c.audio === 'none' ? '<br><br>По аудиозаписи не наблюдается.' : ''}`;
+      return `<label class="chip-check" data-tip="${esc(tip)}"><input type="checkbox" data-group="criteria" value="${esc(`Criterion ${c.code}: ${c.label}`)}"><span>${esc(c.code)} · ${esc(c.label)}${c.audio === 'none' ? '&nbsp;<span class="subtle" aria-label="не наблюдается по аудио">○</span>' : ''}</span></label>`;
+    }).join('')}</div><span class="help">Наведите на критерий, чтобы увидеть strands; ○ — по аудио не наблюдается. Если ни один не выбран, анализ пройдёт по всем критериям предмета.</span>`;
+    const kc = subj.key_concepts_emphasized || [];
+    $('#kcHint').textContent = kc.length ? `Ключевые для предмета: ${kc.join(', ')}` : '';
     const note = subj.audio_observability_note;
     $('#observabilityWarn').innerHTML = note ? `<div class="callout warn">${icon('alert')}<div>${esc(note.trim())}</div></div>` : '';
   }
@@ -712,14 +736,15 @@ async function viewNewLesson() {
 const STEP_NAMES = [
   'Синхронизация аудиодорожек', 'Расшифровка речи', 'Разметка реплик учителя и учеников',
   'Анализ вопросов учителя', 'Определение уровней inquiry', 'Сравнение плана и урока',
-  'Формулирование выводов', 'Подготовка отчёта',
+  'Анализ критериев оценивания', 'Формулирование выводов', 'Подготовка отчёта',
 ];
 
 async function viewLesson(id) {
   await loadOptions().catch(() => {});
   const { lesson } = await api('GET', `/api/lessons/${id}`);
   const title = lesson.lesson_title || lesson.subject || 'Урок без названия';
-  const subjLabel = state.options?.subjects?.[lesson.subject_key]?.label;
+  const subjDef = state.options?.subjects?.[lesson.subject_key];
+  const subjLabel = subjDef ? (subjDef.label_ru || subjDef.label) : '';
   const meta = [
     lesson.teacher_name,
     fmtDate(lesson.lesson_date),
@@ -826,6 +851,7 @@ function renderReport(lesson) {
   const tabs = [
     ['summary', 'Сводка'],
     ['plan', 'План и факт', alignTotal],
+    ...((r.criteria_rows || []).length ? [['criteria', 'Критерии', r.criteria_rows.length]] : []),
     ['questions', 'Вопросы', questions.length],
     ['inquiry', 'Inquiry', episodes.length],
     ['transcript', 'Расшифровка', utts.length],
@@ -852,6 +878,7 @@ function renderReport(lesson) {
 
     <div class="tab-panel" id="panel-summary" role="tabpanel" data-print-title="Сводка">${summaryPanel(r, tt, duration)}</div>
     <div class="tab-panel" id="panel-plan" role="tabpanel" hidden data-print-title="План и факт">${planPanel(rows, r.planned || lesson.planned || {})}</div>
+    <div class="tab-panel" id="panel-criteria" role="tabpanel" hidden data-print-title="Критерии оценивания">${criteriaPanel(r.criteria_rows || [])}</div>
     <div class="tab-panel" id="panel-questions" role="tabpanel" hidden data-print-title="Вопросы учителя">${questionsPanel(questions)}</div>
     <div class="tab-panel" id="panel-inquiry" role="tabpanel" hidden data-print-title="Уровни inquiry">${inquiryPanel(episodes, duration)}</div>
     <div class="tab-panel transcript-panel" id="panel-transcript" role="tabpanel" hidden>${transcriptPanel(utts, r.single_track_mode)}</div>
@@ -952,6 +979,44 @@ function planPanel(rows, planned) {
       </tr>`;
     }).join('')}</tbody>
   </table></div></div>`;
+}
+
+const OPPORTUNITY = {
+  'Strong': { label: 'Ученики работали', cls: 'good' },
+  'Partial': { label: 'Затронуто', cls: 'warn' },
+  'Not observed': { label: 'Не наблюдалось', cls: '' },
+  'Not observable': { label: 'Не видно по аудио', cls: 'plain' },
+};
+
+function criteriaPanel(rows) {
+  if (!rows.length) return '';
+  const byCrit = {};
+  rows.forEach(r => { (byCrit[r.criterion] ||= { label: r.criterion_label, audio: r.audio, rows: [] }).rows.push(r); });
+  const counts = {};
+  rows.forEach(r => { counts[r.opportunity] = (counts[r.opportunity] || 0) + 1; });
+  return `<div class="stack">
+    <div class="callout">${icon('info')}<div>Это не оценка по рубрике — для неё нужны работы учеников. Здесь показано, давал ли урок ученикам возможность проявить каждый strand выбранных критериев. Формулировки strands — по гайду для MYP year 5.</div></div>
+    <div class="legend" style="margin-top:0">${Object.entries(OPPORTUNITY).map(([k, v]) => `<span><span class="badge ${v.cls}">${v.label}</span> <b>${counts[k] || 0}</b></span>`).join('')}</div>
+    ${Object.entries(byCrit).map(([code, c]) => `
+      <div class="panel">
+        <div class="panel-head"><h2>Criterion ${esc(code)} · ${esc(c.label)}</h2>
+          <span class="hint">${c.audio === 'none' ? 'по аудио не наблюдается' : c.audio === 'partial' ? 'по аудио — частично' : ''}</span></div>
+        <div class="panel-body"><ul class="item-list">
+          ${c.rows.map(r => {
+            const o = OPPORTUNITY[r.opportunity] || { label: r.opportunity, cls: '' };
+            return `<li>
+              ${r.timestamp ? `<button class="ts" data-jump="${esc(r.timestamp)}" data-tip="Показать в расшифровке">${esc(r.timestamp)}</button>` : `<span class="ts static">${esc(r.strand_id)}</span>`}
+              <div>
+                <div class="item-meta" style="margin-top:0"><span class="badge ${o.cls}">${esc(o.label)}</span>${r.timestamp ? `<span class="subtle mono">${esc(r.strand_id)}</span>` : ''}</div>
+                <div class="quote" style="margin-top:6px">${esc(r.strand)}</div>
+                ${r.evidence ? `<div class="why">${esc(r.evidence)}</div>` : ''}
+                ${r.suggestion ? `<div class="why"><b style="font-weight:500;color:var(--text)">Идея:</b> ${esc(r.suggestion)}</div>` : ''}
+              </div>
+            </li>`;
+          }).join('')}
+        </ul></div>
+      </div>`).join('')}
+  </div>`;
 }
 
 function questionsPanel(questions) {
