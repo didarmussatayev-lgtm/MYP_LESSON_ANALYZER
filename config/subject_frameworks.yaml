@@ -1,15 +1,25 @@
-# Предметные рамки MYP для выпадающих списков в форме загрузки (app/static/index.html).
-# Извлечено из официальных гайдов IB (Sciences guide, updated April 2023;
-# Language acquisition guide, for use from September 2020/January 2021).
+# Предметные рамки IB MYP: справочники для формы (app/static/app.js) и
+# контекст для LLM-анализа (src/llm_analysis.py).
 #
-# key_concepts и global_contexts ОДИНАКОВЫ для всех предметов MYP - это
-# общая рамка программы, не предметная. related_concepts и
-# assessment_criteria - предметные, разные для каждого subject.
+# Источник — официальные гайды IB (версии указаны в поле `source` у каждого
+# предмета). Сюда перенесена только структура (критерии, strands, related
+# concepts), а не тексты гайдов.
 #
-# Чтобы добавить новый предмет: скопировать блок под новым ключом в
-# subjects, заполнить related_concepts и assessment_criteria из
-# соответствующего guide, при необходимости добавить audio_observability_note
-# (см. language_acquisition - не все критерии наблюдаемы по аудио урока).
+# Strands — формулировки целей для MYP year 5 (итоговые цели программы).
+# Для years 1 и 3 формулировки по смыслу те же, но проще; анализ урока
+# использует их как ориентир, а не как рубрику для выставления баллов.
+#
+# Поля предмета:
+#   label / label_ru          — название группы
+#   source                    — гайд, из которого взяты данные
+#   key_concepts_emphasized   — key concepts, которые гайд называет вкладом предмета
+#   related_concepts          — список для выбора в форме
+#   related_concept_groups    — (опц.) тот же список по дисциплинам/фазам
+#   assessment_criteria       — code, label, strands, audio: full | partial | none
+#   audio_observability_note  — (опц.) предупреждение для формы (ru)
+#   audio_observability_note_en — то же для Word-отчёта (en)
+#
+# Чтобы добавить предмет — скопировать блок и заполнить из гайда.
 
 key_concepts:
   - Aesthetics
@@ -31,8 +41,8 @@ key_concepts:
 
 global_contexts:
   - Identities and relationships
-  - Personal and cultural expression
   - Orientation in space and time
+  - Personal and cultural expression
   - Scientific and technical innovation
   - Globalization and sustainability
   - Fairness and development
@@ -49,15 +59,242 @@ learner_profile_attributes:
   - Balanced
   - Reflective
 
+# Approaches to teaching (ATL guide, Sept 2022) — шесть педагогических
+# принципов IB; используются в анализе как рамка для наблюдаемой практики.
+approaches_to_teaching:
+  - key: inquiry
+    label: "Based on inquiry"
+  - key: conceptual
+    label: "Focused on conceptual understanding"
+  - key: contexts
+    label: "Developed in local and global contexts"
+  - key: collaboration
+    label: "Focused on effective teamwork and collaboration"
+  - key: differentiation
+    label: "Differentiated to meet the needs of all learners"
+  - key: assessment
+    label: "Informed by assessment (formative and summative)"
+
 subjects:
+  language_literature:
+    label: "Language and literature"
+    label_ru: "Язык и литература"
+    source: "Language and literature guide (updated April 2021)"
+    key_concepts_emphasized: [Communication, Connections, Creativity, Perspective]
+    related_concepts:
+      - Audience imperatives
+      - Character
+      - Context
+      - Genre
+      - Intertextuality
+      - Point of view
+      - Purpose
+      - Self-expression
+      - Setting
+      - Structure
+      - Style
+      - Theme
+    assessment_criteria:
+      - code: A
+        label: "Analysing"
+        audio: partial
+        strands:
+          - "analyse the content, context, language, structure, technique and style of text(s) and the relationship among texts"
+          - "analyse the effects of the creator's choices on an audience"
+          - "justify opinions and ideas, using examples, explanations and terminology"
+          - "evaluate similarities and differences by connecting features across and within genres and texts"
+      - code: B
+        label: "Organizing"
+        audio: partial
+        strands:
+          - "employ organizational structures that serve the context and intention"
+          - "organize opinions and ideas in a sustained, coherent and logical manner"
+          - "use referencing and formatting tools to create a presentation style suitable to the context and intention"
+      - code: C
+        label: "Producing text"
+        audio: partial
+        strands:
+          - "produce texts that demonstrate insight, imagination and sensitivity while exploring and reflecting critically on new perspectives and ideas arising from personal engagement with the creative process"
+          - "make stylistic choices in terms of linguistic, literary and visual devices, demonstrating awareness of impact on an audience"
+          - "select relevant details and examples to develop ideas"
+      - code: D
+        label: "Using language"
+        audio: partial
+        strands:
+          - "use appropriate and varied vocabulary, sentence structures and forms of expression"
+          - "write and speak in a register and style that serve the context and intention"
+          - "use correct grammar, syntax and punctuation"
+          - "spell (alphabetic languages), write (character languages) and pronounce with accuracy"
+          - "use appropriate non-verbal communication techniques"
+    audio_observability_note: >
+      По записи урока видна устная работа: обсуждение текстов (A), устные
+      ответы и выступления (B, C, D). Письменные тексты, оформление,
+      орфография и невербальная коммуникация по аудио не оцениваются.
+    audio_observability_note_en: >
+      The recording shows oral work only: discussion of texts (A) and spoken
+      responses or presentations (B, C, D). Written texts, formatting,
+      spelling and non-verbal communication cannot be assessed from audio.
+
+  language_acquisition:
+    label: "Language acquisition"
+    label_ru: "Иностранный язык"
+    source: "Language acquisition guide (for use from September 2020, updated Nov 2022)"
+    key_concepts_emphasized: [Communication, Connections, Creativity, Culture]
+    related_concept_groups:
+      "Phases 1–2": [Audience, Function, Pronunciation, Context, Meaning, Purpose, Conventions, Message, Structure, Form, Patterns, Word choice]
+      "Phases 3–4": [Audience, Function, Point of view, Context, Idiom, Purpose, Conventions, Meaning, Structure, Empathy, Message, Word choice]
+      "Phases 5–6": [Argument, Empathy, Purpose, Audience, Idiom, Stylistic choices, Bias, Inference, Theme, Context, Point of view, Voice]
+    related_concepts:
+      - Argument
+      - Audience
+      - Bias
+      - Context
+      - Conventions
+      - Empathy
+      - Form
+      - Function
+      - Idiom
+      - Inference
+      - Meaning
+      - Message
+      - Patterns
+      - Point of view
+      - Pronunciation
+      - Purpose
+      - Structure
+      - Stylistic choices
+      - Theme
+      - Voice
+      - Word choice
+    assessment_criteria:
+      - code: A
+        label: "Listening"
+        audio: partial
+        strands:
+          - "demonstrate understanding of explicit and implicit spoken information in multimodal texts"
+          - "demonstrate understanding of conventions"
+          - "demonstrate understanding of relationships between the various components of the multimodal texts"
+      - code: B
+        label: "Reading"
+        audio: none
+        strands:
+          - "demonstrate understanding of explicit and implicit written information in multimodal texts"
+          - "demonstrate understanding of conventions"
+          - "demonstrate understanding of relationships between the various components of the multimodal texts"
+      - code: C
+        label: "Speaking"
+        audio: full
+        strands:
+          - "use spoken language to communicate and interact with others"
+          - "demonstrate accuracy and fluency in speaking"
+          - "communicate clearly and effectively"
+      - code: D
+        label: "Writing"
+        audio: none
+        strands:
+          - "use written language to communicate with others"
+          - "demonstrate accurate use of language conventions"
+          - "organize information in writing"
+          - "communicate information with a sense of audience and purpose"
+    audio_observability_note: >
+      По аудиозаписи полноценно наблюдается только Criterion C (Speaking) и
+      частично Criterion A (Listening). Criterion B (Reading) и D (Writing)
+      требуют письменных материалов — «Не наблюдалось» по ним отражает
+      ограничение записи, а не обязательно отсутствие работы на уроке.
+    audio_observability_note_en: >
+      Only Criterion C (Speaking) and, partially, Criterion A (Listening) can
+      be assessed from a lesson audio recording. Criterion B (Reading) and
+      Criterion D (Writing) require written artefacts — "Not observed" for
+      these criteria reflects this limitation by construction, not
+      necessarily an actual absence of evidence.
+
+  individuals_societies:
+    label: "Individuals and societies"
+    label_ru: "Индивиды и общества"
+    source: "Individuals and societies guide (updated Nov 2021)"
+    key_concepts_emphasized: [Change, Global interactions, Systems, "Time, place and space"]
+    related_concept_groups:
+      Economics: [Choice, Consumption, Equity, Globalization, Growth, Model, Poverty, Power, Resources, Scarcity, Sustainability, Trade]
+      Geography: [Causality (cause and consequence), Culture, Disparity and equity, Diversity, Globalization, Management and intervention, Networks, Patterns and trends, Power, Processes, Scale, Sustainability]
+      History: [Causality (cause and consequence), Civilization, Conflict, Cooperation, Culture, Governance, Identity, Ideology, Innovation and revolution, Interdependence, Perspective, Significance]
+      Integrated humanities: [Causality (cause and consequence), Choice, Culture, Equity, Globalization, Identity, Innovation and revolution, Perspective, Power, Processes, Resources, Sustainability]
+    related_concepts:
+      - Causality (cause and consequence)
+      - Choice
+      - Civilization
+      - Conflict
+      - Consumption
+      - Cooperation
+      - Culture
+      - Disparity and equity
+      - Diversity
+      - Equity
+      - Globalization
+      - Governance
+      - Growth
+      - Identity
+      - Ideology
+      - Innovation and revolution
+      - Interdependence
+      - Management and intervention
+      - Model
+      - Networks
+      - Patterns and trends
+      - Perspective
+      - Poverty
+      - Power
+      - Processes
+      - Resources
+      - Scale
+      - Scarcity
+      - Significance
+      - Sustainability
+      - Trade
+    assessment_criteria:
+      - code: A
+        label: "Knowing and understanding"
+        audio: full
+        strands:
+          - "use terminology in context"
+          - "demonstrate knowledge and understanding of subject-specific content and concepts through descriptions, explanations and examples"
+      - code: B
+        label: "Investigating"
+        audio: partial
+        strands:
+          - "formulate a clear and focused research question and justify its relevance"
+          - "formulate and follow an action plan to investigate a research question"
+          - "use research methods to collect and record relevant information"
+          - "evaluate the process and results of the investigation"
+      - code: C
+        label: "Communicating"
+        audio: partial
+        strands:
+          - "communicate information and ideas using an appropriate style for the audience and purpose"
+          - "structure information and ideas in a way that is appropriate to the specified format"
+          - "document sources of information using a recognized convention"
+      - code: D
+        label: "Thinking critically"
+        audio: full
+        strands:
+          - "discuss concepts, issues, models, visual representation and theories"
+          - "synthesize information to make valid arguments"
+          - "analyse and evaluate a range of sources/data in terms of origin and purpose, examining value and limitations"
+          - "interpret different perspectives and their implications"
+
   sciences:
     label: "Sciences"
-    # Sciences guide, Table 2a-2d - объединены disciplines (biology/chemistry/
-    # physics/integrated) в один список; учитель не ограничен этим списком.
+    label_ru: "Естественные науки"
+    source: "Sciences guide (updated April 2023)"
+    key_concepts_emphasized: [Change, Relationships, Systems]
+    related_concept_groups:
+      Biology: [Balance, Consequences, Energy, Environment, Evidence, Form, Function, Interaction, Models, Movement, Patterns, Transformation]
+      Chemistry: [Balance, Conditions, Consequences, Energy, Evidence, Form, Function, Interaction, Models, Movement, Patterns, Transfer]
+      Physics: [Consequences, Development, Energy, Environment, Evidence, Form, Function, Interaction, Models, Movement, Patterns, Transformation]
     related_concepts:
       - Balance
       - Conditions
       - Consequences
+      - Development
       - Energy
       - Environment
       - Evidence
@@ -72,65 +309,291 @@ subjects:
     assessment_criteria:
       - code: A
         label: "Knowing and understanding"
+        audio: full
+        strands:
+          - "explain scientific knowledge"
+          - "apply scientific knowledge and understanding to solve problems set in familiar and unfamiliar situations"
+          - "analyse and evaluate information to make scientifically supported judgments"
       - code: B
         label: "Inquiring and designing"
+        audio: partial
+        strands:
+          - "explain a problem or question to be tested by a scientific investigation"
+          - "formulate a testable hypothesis and explain it using scientific reasoning"
+          - "explain how to manipulate the variables, and explain how data will be collected"
+          - "design scientific investigations"
       - code: C
         label: "Processing and evaluating"
+        audio: partial
+        strands:
+          - "present collected and transformed data"
+          - "interpret data and explain results using scientific reasoning"
+          - "evaluate the validity of a hypothesis based on the outcome of the scientific investigation"
+          - "evaluate the validity of the method"
+          - "explain improvements or extensions to the method"
       - code: D
         label: "Reflecting on the impacts of science"
-    audio_observability_note: null
+        audio: partial
+        strands:
+          - "explain the ways in which science is applied and used to address a specific problem or issue"
+          - "discuss and evaluate the various implications of the use of science and its application in solving a specific problem or issue"
+          - "apply scientific language effectively"
+          - "document the work of others and sources of information used"
 
-  language_acquisition:
-    label: "Language Acquisition"
-    # Language acquisition guide, Table 6 - объединены phases 1-2/3-4/5-6.
+  mathematics:
+    label: "Mathematics"
+    label_ru: "Математика"
+    source: "Mathematics guide (updated Nov 2022)"
+    key_concepts_emphasized: [Form, Logic, Relationships]
     related_concepts:
-      - Audience
-      - Function
-      - Pronunciation
-      - Context
-      - Meaning
-      - Purpose
-      - Conventions
-      - Message
-      - Structure
-      - Form
+      - Approximation
+      - Change
+      - Equivalence
+      - Generalization
+      - Models
       - Patterns
-      - Word choice
-      - Point of view
-      - Idiom
-      - Empathy
-      - Argument
-      - Stylistic choices
-      - Bias
-      - Inference
-      - Theme
-      - Voice
+      - Quantity
+      - Representation
+      - Simplification
+      - Space
+      - Systems
+      - Validity
     assessment_criteria:
       - code: A
-        label: "Listening"
+        label: "Knowing and understanding"
+        audio: partial
+        strands:
+          - "select appropriate mathematics when solving problems in both familiar and unfamiliar situations"
+          - "apply the selected mathematics successfully when solving problems"
+          - "solve problems correctly in a variety of contexts"
       - code: B
-        label: "Reading"
+        label: "Investigating patterns"
+        audio: partial
+        strands:
+          - "select and apply mathematical problem-solving techniques to discover complex patterns"
+          - "describe patterns as general rules consistent with findings"
+          - "prove, or verify and justify, general rules"
       - code: C
-        label: "Speaking"
+        label: "Communicating"
+        audio: partial
+        strands:
+          - "use appropriate mathematical language (notation, symbols and terminology) in both oral and written explanations"
+          - "use appropriate forms of mathematical representation to present information"
+          - "move between different forms of mathematical representation"
+          - "communicate complete, coherent and concise mathematical lines of reasoning"
+          - "organize information using a logical structure"
       - code: D
-        label: "Writing"
-    # ВАЖНО: из аудиозаписи урока физически наблюдаемо в основном Criterion C
-    # (Speaking) и частично Criterion A (Listening, если на уроке звучит
-    # целевой язык, который слушают ученики). Criterion B (Reading) и D
-    # (Writing) не могут быть подтверждены аудио-транскриптом - это должно
-    # явно отражаться в methodology_notes отчёта, если выбран этот предмет.
+        label: "Applying mathematics in real-life contexts"
+        audio: partial
+        strands:
+          - "identify relevant elements of authentic real-life situations"
+          - "select appropriate mathematical strategies when solving authentic real-life situations"
+          - "apply the selected mathematical strategies successfully to reach a solution"
+          - "justify the degree of accuracy of a solution"
+          - "justify whether a solution makes sense in the context of the authentic real-life situation"
     audio_observability_note: >
-      Только Criterion C (Speaking) и частично Criterion A (Listening)
-      можно оценить по аудиозаписи урока. Criterion B (Reading) и
-      Criterion D (Writing) требуют письменных/читаемых артефактов урока
-      и не могут быть подтверждены транскриптом - alignment по этим
-      критериям в Блоке 1 будет "Not observed" по построению, а не
-      из-за реального отсутствия свидетельств.
-    # Английская версия - для вставки в docx-отчёт (отчёт на английском).
+      Значительная часть математики — запись на доске и в тетрадях. По аудио
+      видны устные рассуждения, объяснения и обсуждение стратегий; формулы,
+      графики и письменные решения в анализ не попадают.
     audio_observability_note_en: >
-      Only Criterion C (Speaking) and, partially, Criterion A (Listening) can
-      be assessed from a lesson audio recording. Criterion B (Reading) and
-      Criterion D (Writing) require written/readable lesson artefacts and
-      cannot be confirmed from a transcript - "Not observed" alignment for
-      these criteria in Block 1 reflects this limitation by construction,
-      not necessarily an actual absence of evidence.
+      Much of mathematics happens in writing. The recording captures oral
+      reasoning, explanations and discussion of strategies; formulas, graphs
+      and written solutions are not visible to the analysis.
+
+  arts:
+    label: "Arts"
+    label_ru: "Искусство"
+    source: "MYP Arts guide (updated August 2023)"
+    key_concepts_emphasized: [Aesthetics, Change, Communication, Identity]
+    related_concept_groups:
+      "Visual arts": [Audience, Boundaries, Composition, Expression, Genre, Innovation, Interpretation, Narrative, Presentation, Representation, Style, Visual culture]
+      "Performing arts": [Audience, Boundaries, Composition, Expression, Genre, Innovation, Interpretation, Narrative, Play, Presentation, Role, Structure]
+    related_concepts:
+      - Audience
+      - Boundaries
+      - Composition
+      - Expression
+      - Genre
+      - Innovation
+      - Interpretation
+      - Narrative
+      - Play
+      - Presentation
+      - Representation
+      - Role
+      - Structure
+      - Style
+      - Visual culture
+    assessment_criteria:
+      - code: A
+        label: "Investigating"
+        audio: partial
+        strands:
+          - "investigate a movement(s) or genre(s) in their chosen arts discipline, related to the statement of inquiry"
+          - "critique an artwork or performance from the chosen movement(s) or genre(s)"
+      - code: B
+        label: "Developing"
+        audio: partial
+        strands:
+          - "practically explore ideas to inform development of a final artwork or performance"
+          - "present a clear artistic intention for the final artwork or performance in line with the statement of inquiry"
+      - code: C
+        label: "Creating/Performing"
+        audio: partial
+        strands:
+          - "create or perform an artwork"
+      - code: D
+        label: "Evaluating"
+        audio: partial
+        strands:
+          - "appraise their own artwork or performance"
+          - "reflect on their development as an artist"
+    audio_observability_note: >
+      Практическая работа (рисунок, движение, сценическое действие) по аудио
+      не видна. Анализ опирается на обсуждение, критику работ и рефлексию;
+      исполнение слышно только в музыке и отчасти в театре.
+    audio_observability_note_en: >
+      Practical work (visual art, movement, staging) is not visible in audio.
+      The analysis relies on discussion, critique and reflection; performance
+      is audible only in music and partly in drama.
+
+  physical_health:
+    label: "Physical and health education"
+    label_ru: "Физическая культура и здоровье"
+    source: "Physical and health education guide (updated April 2021)"
+    key_concepts_emphasized: [Change, Communication, Development, Relationships]
+    related_concepts:
+      - Adaptation
+      - Balance
+      - Choice
+      - Energy
+      - Environment
+      - Function
+      - Interaction
+      - Movement
+      - Perspective
+      - Refinement
+      - Space
+      - Systems
+    assessment_criteria:
+      - code: A
+        label: "Knowing and understanding"
+        audio: full
+        strands:
+          - "explain physical and health education factual, procedural and conceptual knowledge"
+          - "apply physical and health education knowledge to analyse issues and solve problems set in familiar and unfamiliar situations"
+          - "apply physical and health terminology effectively to communicate understanding"
+      - code: B
+        label: "Planning for performance"
+        audio: partial
+        strands:
+          - "develop goals to enhance performance"
+          - "design, explain and justify a plan to improve physical performance and health"
+      - code: C
+        label: "Applying and performing"
+        audio: none
+        strands:
+          - "demonstrate and apply a range of skills and techniques effectively"
+          - "demonstrate and apply a range of strategies and movement concepts effectively"
+          - "analyse and apply information to perform effectively"
+      - code: D
+        label: "Reflecting and improving performance"
+        audio: partial
+        strands:
+          - "explain and demonstrate strategies to enhance interpersonal skills"
+          - "analyse and evaluate the effectiveness of a plan based on the outcome"
+          - "analyse and evaluate performance"
+    audio_observability_note: >
+      Двигательная деятельность (Criterion C) по аудио не наблюдается. Запись
+      в спортзале обычно шумная — лучше использовать петличный микрофон
+      учителя. Анализ покажет инструкции, обратную связь и обсуждение.
+    audio_observability_note_en: >
+      Physical performance (Criterion C) cannot be observed from audio. Gym
+      recordings are noisy; the analysis covers instructions, feedback and
+      discussion only.
+
+  design:
+    label: "Design"
+    label_ru: "Дизайн"
+    source: "Design guide (updated April 2021)"
+    key_concepts_emphasized: [Communication, Communities, Development, Systems]
+    related_concepts:
+      - Adaptation
+      - Collaboration
+      - Ergonomics
+      - Evaluation
+      - Form
+      - Function
+      - Innovation
+      - Invention
+      - Markets and trends
+      - Perspective
+      - Resources
+      - Sustainability
+    assessment_criteria:
+      - code: A
+        label: "Inquiring and analysing"
+        audio: partial
+        strands:
+          - "explain and justify the need for a solution to a problem for a specified client/target audience"
+          - "identify and prioritize the primary and secondary research needed to develop a solution to the problem"
+          - "analyse a range of existing products that inspire a solution to the problem"
+          - "develop a detailed design brief which summarizes the analysis of relevant research"
+      - code: B
+        label: "Developing ideas"
+        audio: partial
+        strands:
+          - "develop a design specification which clearly states the success criteria for the design of a solution"
+          - "develop a range of feasible design ideas which can be correctly interpreted by others"
+          - "present the final chosen design and justify its selection"
+          - "develop accurate and detailed planning drawings/diagrams and outline the requirements for the creation of the chosen solution"
+      - code: C
+        label: "Creating the solution"
+        audio: none
+        strands:
+          - "construct a logical plan, which describes the efficient use of time and resources, sufficient for peers to be able to follow to create the solution"
+          - "demonstrate excellent technical skills when making the solution"
+          - "follow the plan to create the solution, which functions as intended"
+          - "fully justify changes made to the chosen design and plan when making the solution"
+      - code: D
+        label: "Evaluating"
+        audio: partial
+        strands:
+          - "design detailed and relevant testing methods, which generate data, to measure the success of the solution"
+          - "critically evaluate the success of the solution against the design specification"
+          - "explain how the solution could be improved"
+          - "explain the impact of the solution on the client/target audience"
+    audio_observability_note: >
+      Создание продукта (Criterion C) и чертежи по аудио не видны. Анализ
+      опирается на обсуждение проблемы, идей, спецификации и оценки решения.
+    audio_observability_note_en: >
+      Making the product (Criterion C) and drawings are not visible in audio.
+      The analysis relies on discussion of the problem, ideas, specification
+      and evaluation.
+
+  interdisciplinary:
+    label: "Interdisciplinary unit"
+    label_ru: "Междисциплинарный юнит"
+    source: "Interdisciplinary teaching and learning in the MYP (updated May 2022)"
+    key_concepts_emphasized: []
+    related_concepts: []
+    related_concepts_note: "В междисциплинарном юните related concepts берутся из предметов, которые его составляют."
+    assessment_criteria:
+      - code: A
+        label: "Evaluating"
+        audio: partial
+        strands:
+          - "analyse disciplinary knowledge"
+          - "evaluate the interdisciplinary perspectives"
+      - code: B
+        label: "Synthesizing"
+        audio: partial
+        strands:
+          - "create a product that communicates a purposeful interdisciplinary understanding"
+          - "justify how their product communicates interdisciplinary understanding"
+      - code: C
+        label: "Reflecting"
+        audio: full
+        strands:
+          - "discuss the development of their own interdisciplinary learning"
+          - "discuss how new interdisciplinary understanding enables action"

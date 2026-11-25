@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -41,6 +42,7 @@ STEP_LABELS = {
     "questions": "Анализ вопросов учителя",
     "inquiry": "Определение уровней inquiry",
     "alignment": "Сравнение плана и урока",
+    "criteria": "Анализ критериев оценивания",
     "reflection": "Формулирование выводов",
     "report": "Подготовка отчёта",
 }
@@ -102,6 +104,7 @@ def run_pipeline(
     taxonomy = la._load_taxonomy(taxonomy_path)
 
     audio_observability_note = None
+    subject_def: dict = {}
     if subject_key:
         with open(subject_frameworks_path, encoding="utf-8") as f:
             subject_frameworks = yaml.safe_load(f)
@@ -235,6 +238,24 @@ def run_pipeline(
         alignment_rows = la.planned_vs_observed(planned, utterances, taxonomy)
         _save_json(alignment_path, alignment_rows)
 
+    # --- Stage 4b: критерии оценивания предмета (strands) ---
+    criteria_path = _stage_path(workdir_p, "06b_criteria")
+    step("criteria")
+    selected_codes = sorted(set(re.findall(r"Criterion ([A-D])", planned.get("assessment_criteria", "") or "")))
+    if not selected_codes and subject_def:
+        # Критерии не выбраны в плане — анализируем все: так учитель всё равно
+        # увидит, по каким strands урок давал ученикам возможность проявиться.
+        selected_codes = [c["code"] for c in subject_def.get("assessment_criteria", [])]
+    if resume and criteria_path.exists():
+        criteria_rows = _load_json(criteria_path)
+        progress("[resume] loaded criteria evidence")
+    elif subject_def and selected_codes:
+        progress(f"Анализ strands критериев {', '.join(selected_codes)} (Gemini)...")
+        criteria_rows = la.criteria_evidence(subject_def, selected_codes, utterances)
+        _save_json(criteria_path, criteria_rows)
+    else:
+        criteria_rows = []
+
     reflection_path = _stage_path(workdir_p, "07_reflection")
     step("reflection")
     if resume and reflection_path.exists():
@@ -242,7 +263,7 @@ def run_pipeline(
         progress("[resume] loaded reflection synthesis")
     else:
         progress("Синтез AI-assisted рефлексии (Gemini)...")
-        reflection = la.synthesize_reflection(talk_time, questions, inquiry_episodes, alignment_rows)
+        reflection = la.synthesize_reflection(talk_time, questions, inquiry_episodes, alignment_rows, criteria_rows)
         _save_json(reflection_path, reflection)
 
     intended_summary_path = _stage_path(workdir_p, "08_intended_vs_enacted")
@@ -288,6 +309,8 @@ def run_pipeline(
         methodology_notes=ctx["methodology_notes"],
         single_track_mode=single_track_mode,
         slide_timeline=slide_timeline,
+        criteria_rows=criteria_rows,
+        subject_key=subject_key,
     )
 
 
@@ -303,6 +326,8 @@ def build_results(
     methodology_notes: str,
     single_track_mode: bool,
     slide_timeline=None,
+    criteria_rows: list[dict] | None = None,
+    subject_key: str | None = None,
 ) -> dict:
     """
     Структурированные результаты для веб-отчёта и списка уроков.
@@ -342,6 +367,8 @@ def build_results(
         "methodology_notes": methodology_notes,
         "single_track_mode": single_track_mode,
         "slide_timeline": slide_timeline,
+        "subject_key": subject_key,
+        "criteria_rows": criteria_rows or [],
         "utterances": [asdict(u) for u in utterances],
     }
 

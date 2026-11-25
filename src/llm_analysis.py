@@ -262,6 +262,7 @@ def synthesize_reflection(
     question_stats: list[dict],
     inquiry_levels: list[dict],
     alignment_rows: list[dict],
+    criteria_rows: list[dict] | None = None,
 ) -> dict:
     system_prompt = """Ты — ассистент-коуч для педагогической рефлексии по методике IB MYP.
 На основе предоставленных данных анализа урока сформулируй:
@@ -282,6 +283,10 @@ def synthesize_reflection(
             "question_classification": question_stats,
             "inquiry_levels": inquiry_levels,
             "planned_vs_observed": alignment_rows,
+            "assessment_criteria_strand_opportunities": [
+                {k: r.get(k) for k in ("strand_id", "strand", "opportunity", "evidence")}
+                for r in (criteria_rows or [])
+            ],
         },
         ensure_ascii=False,
         indent=2,
@@ -289,3 +294,83 @@ def synthesize_reflection(
 
     result = _call_gemini_json(system_prompt, user_prompt)
     return result if isinstance(result, dict) else {}
+
+
+# ---------------------------------------------------------------------------
+# Блок 5: критерии оценивания предмета — где на уроке отрабатывались strands
+# ---------------------------------------------------------------------------
+
+AUDIO_LABELS = {
+    "full": "observable from lesson audio",
+    "partial": "only partially observable from lesson audio (oral discussion only)",
+    "none": "NOT observable from lesson audio (written/practical work)",
+}
+
+
+def criteria_evidence(
+    subject_def: dict, selected_codes: list[str], utterances: list[Utterance]
+) -> list[dict]:
+    """
+    Для каждого strand выбранных критериев предмета (config/subject_frameworks.yaml)
+    ищет в транскрипте моменты, где ученики работали над этим strand.
+
+    Это не выставление баллов по рубрике (для этого нужны работы учеников),
+    а карта возможностей: давал ли урок ученикам повод продемонстрировать
+    каждый strand.
+    """
+    criteria = [c for c in subject_def.get("assessment_criteria", []) if c["code"] in selected_codes]
+    if not criteria:
+        return []
+
+    criteria_text = "\n".join(
+        f"Criterion {c['code']}: {c['label']} ({AUDIO_LABELS.get(c.get('audio', 'partial'), '')})\n"
+        + "\n".join(f"  {c['code']}.{i + 1}: {s}" for i, s in enumerate(c.get("strands", [])))
+        for c in criteria
+    )
+
+    system_prompt = f"""Ты — ассистент для педагогического анализа уроков по методике IB MYP.
+Предмет: {subject_def.get('label', '')}.
+Учитель запланировал работу по критериям оценивания ниже. Для КАЖДОГО strand
+найди в транскрипте урока моменты, где ученики получили возможность
+продемонстрировать этот strand (задание, вопрос, обсуждение, ответ ученика).
+
+{criteria_text}
+
+Оценка opportunity для каждого strand:
+- "Strong" — ученики явно и содержательно работали над strand (есть их реплики);
+- "Partial" — strand затронут (например, учитель объяснил или поставил задачу),
+  но ученики почти не демонстрировали его сами;
+- "Not observed" — свидетельств в транскрипте нет;
+- "Not observable" — strand по своей природе не наблюдается по аудио
+  (письменная/практическая работа) и свидетельств нет.
+
+Верни ТОЛЬКО валидный JSON-массив без markdown, по одному элементу на каждый strand,
+в том же порядке:
+{{"strand_id": "A.1", "opportunity": "Strong|Partial|Not observed|Not observable", "evidence": "конкретная цитата/пересказ на языке урока или пусто", "timestamp": "MM:SS или пусто", "suggestion": "одна короткая конкретная идея, как дать ученикам больше возможности по этому strand (на русском); пусто, если Strong"}}
+
+Не придумывай свидетельств, которых нет в транскрипте."""
+
+    user_prompt = "Транскрипт урока:\n\n" + _format_utterances(utterances)
+    result = _call_gemini_json(system_prompt, user_prompt)
+    if not isinstance(result, list):
+        return []
+
+    # Подставляем коды и тексты strands из конфига, а не из ответа модели.
+    by_id = {r.get("strand_id"): r for r in result if isinstance(r, dict)}
+    out = []
+    for c in criteria:
+        for i, strand in enumerate(c.get("strands", [])):
+            sid = f"{c['code']}.{i + 1}"
+            r = by_id.get(sid, {})
+            out.append({
+                "criterion": c["code"],
+                "criterion_label": c["label"],
+                "audio": c.get("audio", "partial"),
+                "strand_id": sid,
+                "strand": strand,
+                "opportunity": r.get("opportunity", "Not observed"),
+                "evidence": r.get("evidence", ""),
+                "timestamp": r.get("timestamp", ""),
+                "suggestion": r.get("suggestion", ""),
+            })
+    return out
