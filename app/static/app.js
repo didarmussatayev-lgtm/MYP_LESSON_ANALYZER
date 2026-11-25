@@ -76,6 +76,7 @@ function fmtDuration(sec) {
   sec = Math.round(sec);
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
   if (h) return `${h} ч ${m} мин`;
+  if (sec < 60) return `${sec} с`;
   return s && m < 10 ? `${m} мин ${s} с` : `${m} мин`;
 }
 
@@ -222,6 +223,7 @@ const ROUTES = [
   [/^\/login$/, viewLogin, { public: true }],
   [/^\/$/, viewLessons],
   [/^\/new$/, viewNewLesson],
+  [/^\/record$/, viewRecord],
   [/^\/lessons\/([a-f0-9]+)$/, viewLesson],
   [/^\/users$/, viewUsers, { admin: true }],
   [/^\/account$/, viewAccount],
@@ -232,7 +234,8 @@ async function route() {
   navCleanup.forEach(fn => fn()); navCleanup = [];
   hideTip();
 
-  const path = location.hash.replace(/^#/, '') || '/';
+  const [path, qs] = (location.hash.replace(/^#/, '') || '/').split('?');
+  state.query = new URLSearchParams(qs || '');
   for (const [re, view, opts = {}] of ROUTES) {
     const m = re.exec(path);
     if (!m) continue;
@@ -270,6 +273,8 @@ function renderShell(active, content) {
         <nav class="nav">
           ${nav('/', 'lessons', 'list', 'Уроки')}
           ${nav('/new', 'new', 'plus', 'Новый анализ')}
+          ${nav('/record', 'record', 'mic', 'Записать урок')}
+          <a href="#/record" class="rec-indicator" id="recIndicator" hidden><span class="rec-dot recording"></span>Идёт запись <span class="mono" id="recIndicatorTime">00:00</span></a>
           ${u.role === 'admin' ? `<div class="nav-section">Администрирование</div>${nav('/users', 'users', 'users', 'Пользователи')}` : ''}
         </nav>
         <div class="sidebar-foot">
@@ -292,6 +297,7 @@ function renderShell(active, content) {
           <button class="btn ghost icon-btn" id="menuBtn" aria-label="Открыть меню">${icon('menu')}</button>
           <div class="brand-mark">MYP</div>
           <div class="brand-name">Lesson Analyzer</div>
+          <a href="#/record" class="rec-indicator top" id="recIndicatorTop" hidden><span class="rec-dot recording"></span><span class="mono" id="recIndicatorTopTime">00:00</span></a>
         </header>
         <main id="view">${content}</main>
       </div>
@@ -300,7 +306,11 @@ function renderShell(active, content) {
   $('#menuBtn').onclick = () => shell.classList.add('nav-open');
   $('#scrim').onclick = () => shell.classList.remove('nav-open');
   $$('.nav a, .foot-links a').forEach(a => a.addEventListener('click', () => shell.classList.remove('nav-open')));
+  updateRecIndicator();
   $('#logoutBtn').onclick = async () => {
+    if (recorder.active && ['recording', 'paused', 'interrupted', 'uploading'].includes(recorder.active.state)) {
+      return toast('Сначала завершите запись урока.', 'bad');
+    }
     await api('POST', '/api/auth/logout').catch(() => {});
     state.user = null;
     go('/login');
@@ -531,7 +541,9 @@ async function viewNewLesson() {
           <div class="form-section-head"><span class="step-no">01</span><h2>Запись урока</h2>
             <p>Обязательна запись с микрофона учителя. Вторая запись из центра класса заметно повышает точность разделения реплик.</p></div>
           <div class="stack">
-            ${dropzone({ name: 'teacher_track', title: 'Запись учителя', sub: 'Петличный микрофон или телефон у учителя · mp3, m4a, wav, ogg', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm,.aac,.flac', iconName: 'mic', required: true })}
+            <div id="recSlot" hidden></div>
+            ${dropzone({ name: 'teacher_track', title: 'Запись учителя', sub: 'Петличный микрофон или телефон у учителя · mp3, m4a, wav, ogg · или <a href="#/record">запишите урок на сайте</a>', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm,.aac,.flac', iconName: 'mic', required: true })}
+            <div id="recOffer"></div>
             ${dropzone({ name: 'classroom_track', title: 'Запись класса <span class="opt">— по желанию</span>', sub: 'Телефон в центре класса', accept: 'audio/*,.m4a,.mp3,.wav,.ogg,.webm,.aac,.flac', iconName: 'mic' })}
             ${dropzone({ name: 'pptx', title: 'Презентация <span class="opt">— по желанию</span>', sub: 'Файл .pptx, используется для привязки слайдов к ходу урока', accept: '.pptx', iconName: 'slides' })}
             <div class="callout" id="singleTrackNote">${icon('info')}<div>Если загружена только запись учителя, роли «учитель / ученик» определяются по смыслу речи. Это менее точно, чем при двух записях, — в отчёте будет соответствующая пометка.</div></div>
@@ -556,6 +568,7 @@ async function viewNewLesson() {
           <div class="form-section-head"><span class="step-no">03</span><h2>План урока</h2>
             <p>Из unit planner. С этими полями отчёт сравнит запланированное с тем, что реально прозвучало на уроке. Можно заполнить частично.</p></div>
           <div class="form-grid">
+            ${plannerBox()}
             <div class="field"><label for="key_concept">Key concept</label>${sel('key_concept', o.key_concepts)}<span class="help" id="kcHint"></span></div>
             <div class="field"><label for="global_context">Global context</label>${sel('global_context', o.global_contexts)}</div>
             <div class="field span-2"><span class="label">Related concepts</span><div id="relatedConcepts"></div></div>
@@ -674,10 +687,41 @@ async function viewNewLesson() {
     });
   });
 
+  bindPlanner(form, o, refreshSubject, saveDraft);
+
+  // Запись, сделанная на сайте, вместо файла учителя
+  let recordingId = null;
+  function useRecording(rec) {
+    recordingId = rec.id;
+    $('#recSlot').hidden = false;
+    $('#recSlot').innerHTML = `<div class="dropzone has-file" style="cursor:default">
+      <span class="dz-icon">${icon('mic')}</span>
+      <span style="min-width:0"><span class="dz-title">Запись с сайта · ${fmtDuration(rec.duration_seconds)}</span><br><span class="dz-sub">Сделана ${esc(fmtTimestamp(rec.created_at))}</span></span>
+      <button type="button" class="btn ghost sm dz-clear" id="recUnset">Загрузить файл вместо неё</button></div>`;
+    $('[data-dz="teacher_track"]').hidden = true;
+    $('#recOffer').innerHTML = '';
+    $('#recUnset').onclick = () => { recordingId = null; $('#recSlot').hidden = true; $('[data-dz="teacher_track"]').hidden = false; offerRecordings(); };
+  }
+  async function offerRecordings() {
+    const list = (await api('GET', '/api/recordings').catch(() => ({ recordings: [] }))).recordings.filter(r => r.status === 'ready');
+    if (!list.length || recordingId) { $('#recOffer').innerHTML = ''; return; }
+    const r0 = list[0];
+    $('#recOffer').innerHTML = `<div class="callout info">${icon('mic')}<div style="flex:1">Есть готовая запись с сайта от ${esc(fmtTimestamp(r0.created_at))} (${fmtDuration(r0.duration_seconds)}).
+      <button type="button" class="btn sm" id="recUse" style="margin-left:6px">Использовать</button></div></div>`;
+    $('#recUse').onclick = () => useRecording(r0);
+  }
+  const recParam = state.query?.get('rec');
+  if (recParam) {
+    api('GET', `/api/recordings/${recParam}`).then(d => {
+      if (d.recording.status === 'ready') useRecording(d.recording);
+      else { toast('Эта запись ещё не готова или уже использована.', 'bad'); offerRecordings(); }
+    }).catch(() => offerRecordings());
+  } else offerRecordings();
+
   form.addEventListener('submit', e => {
     e.preventDefault();
     const teacher = form.elements.teacher_track.files[0];
-    if (!teacher) {
+    if (!teacher && !recordingId) {
       toast('Добавьте запись учителя — без неё анализ невозможен.', 'bad');
       $('[data-dz="teacher_track"]').scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
@@ -691,9 +735,10 @@ async function viewNewLesson() {
     const atlDetail = String(fd.get('atl_skills_detail') || '').trim();
     fd.set('atl_skills', atlDetail ? (atl ? `${atl} — ${atlDetail}` : atlDetail) : atl);
     fd.delete('atl_skills_detail');
-    for (const k of ['classroom_track', 'pptx']) {
+    for (const k of ['teacher_track', 'classroom_track', 'pptx']) {
       const f = fd.get(k); if (f && f.size === 0) fd.delete(k);
     }
+    if (recordingId && !teacher) { fd.delete('teacher_track'); fd.set('recording_id', recordingId); }
 
     const btn = $('#submitBtn'), st = $('#uploadState');
     btn.disabled = true;
@@ -1322,6 +1367,619 @@ async function viewAccount() {
 
 /* ------------------------------------------------------------------ */
 /* Запуск                                                              */
+/* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* Запись урока на сайте                                               */
+/* ------------------------------------------------------------------ */
+
+const REC_TIMESLICE_MS = 10000;
+
+function pickRecorderMime() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  for (const m of ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm']) {
+    try { if (MediaRecorder.isTypeSupported(m)) return m; } catch { /* */ }
+  }
+  return '';
+}
+
+/* Очередь отправки кусков: строго по порядку, с повторами при обрыве связи.
+   Все куски остаются в памяти до завершения записи — если сервер сообщит,
+   что какого-то не хватает, он будет отправлен ещё раз. */
+class ChunkUploader {
+  constructor(recId, onChange) {
+    this.recId = recId; this.onChange = onChange;
+    this.queue = []; this.all = new Map();
+    this.sentBytes = 0; this.busy = false; this.failing = false; this.lastError = '';
+  }
+  push(seg, seq, blob) {
+    this.all.set(`${seg}:${seq}`, blob);
+    this.queue.push({ seg, seq, blob });
+    this.pump();
+  }
+  requeue(missing) {
+    for (const [seg, seq] of missing) {
+      const blob = this.all.get(`${seg}:${seq}`);
+      if (blob) this.queue.push({ seg, seq, blob });
+    }
+    this.pump();
+  }
+  get pending() { return this.queue.length; }
+  async pump() {
+    if (this.busy) return;
+    this.busy = true;
+    let delay = 2000;
+    while (this.queue.length) {
+      const item = this.queue[0];
+      try {
+        const res = await fetch(`/api/recordings/${this.recId}/chunks/${item.seg}/${item.seq}`, {
+          method: 'PUT', body: item.blob, credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/octet-stream' },
+        });
+        if (res.status === 401) { this.lastError = 'Сессия истекла — войдите снова в другой вкладке, запись продолжится.'; throw new Error('401'); }
+        if (res.status === 409) { this.queue.shift(); continue; } // запись уже завершена
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        this.queue.shift();
+        this.sentBytes += item.blob.size;
+        this.failing = false; this.lastError = ''; delay = 2000;
+      } catch {
+        this.failing = true;
+        if (!this.lastError) this.lastError = 'Нет связи с сервером. Запись продолжается, куски будут отправлены, когда связь восстановится.';
+        this.onChange?.();
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 30000);
+        continue;
+      }
+      this.onChange?.();
+    }
+    this.busy = false;
+    this.onChange?.();
+  }
+  async flush(timeoutMs = 120000) {
+    const t0 = Date.now();
+    while (this.queue.length || this.busy) {
+      if (Date.now() - t0 > timeoutMs) return false;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return true;
+  }
+}
+
+/* Один активный рекордер на всё приложение: запись не прерывается при
+   переходе между страницами сайта. */
+const recorder = {
+  active: null,        // { id, mime, segment, seqBySeg, lastSeq, uploader, ... }
+  listeners: new Set(),
+  notify() { this.listeners.forEach(fn => { try { fn(); } catch { /* */ } }); updateRecIndicator(); },
+};
+
+function recElapsedMs(r) {
+  if (!r) return 0;
+  return r.accumulatedMs + (r.runningSince ? Date.now() - r.runningSince : 0);
+}
+
+async function acquireWakeLock(r) {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+      r.wakeLock = await navigator.wakeLock.request('screen');
+      r.wakeLock.addEventListener?.('release', () => { r.wakeLock = null; });
+    }
+  } catch { r.wakeLock = null; }
+}
+
+const AUDIO_CONSTRAINTS = {
+  audio: {
+    // Шумоподавление и эхоподавление выключены: они «съедают» тихие
+    // реплики учеников. Автоусиление оставлено — помогает с дальними голосами.
+    echoCancellation: false, noiseSuppression: false, autoGainControl: true, channelCount: 1,
+  },
+};
+
+async function startSegment(r) {
+  const stream = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS);
+  const opts = { audioBitsPerSecond: 48000 };
+  if (r.mime) opts.mimeType = r.mime;
+  const mr = new MediaRecorder(stream, opts);
+  const seg = r.segment;
+  r.seqBySeg[seg] = r.seqBySeg[seg] ?? 0;
+  r.stream = stream; r.mr = mr;
+
+  mr.ondataavailable = e => {
+    if (!e.data || !e.data.size) return;
+    const seq = r.seqBySeg[seg]++;
+    r.lastSeq[seg] = seq;
+    r.uploader.push(seg, seq, e.data);
+    recorder.notify();
+  };
+  mr.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    if (r.mr === mr) r.mr = null;
+    if (!r.stopping) segmentInterrupted(r);
+  };
+  stream.getAudioTracks()[0]?.addEventListener('ended', () => {
+    if (mr.state !== 'inactive') { try { mr.stop(); } catch { /* */ } }
+  });
+  setupMeter(r, stream);
+  mr.start(REC_TIMESLICE_MS);
+  r.runningSince = Date.now();
+  r.state = 'recording';
+  acquireWakeLock(r);
+  recorder.notify();
+}
+
+function segmentInterrupted(r) {
+  if (r.runningSince) { r.accumulatedMs += Date.now() - r.runningSince; r.runningSince = null; }
+  r.state = 'interrupted';
+  r.interruptedAt = Date.now();
+  recorder.notify();
+  tryResumeSegment(r);
+}
+
+async function tryResumeSegment(r) {
+  if (recorder.active !== r || r.state !== 'interrupted' || r.stopping) return;
+  if (document.visibilityState !== 'visible') return; // продолжим, когда страница снова откроется
+  r.segment += 1;
+  try {
+    await startSegment(r);
+    const gap = Math.max(1, Math.round((Date.now() - r.interruptedAt) / 1000));
+    r.gaps.push({ at: recElapsedMs(r), seconds: gap });
+    toast(`Запись прерывалась на ${fmtDuration(gap)} и продолжена.`);
+  } catch {
+    r.segment -= 1;
+    r.state = 'interrupted';
+    recorder.notify();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  const r = recorder.active;
+  if (!r || document.visibilityState !== 'visible') return;
+  if (r.state === 'interrupted') tryResumeSegment(r);
+  if (r.state === 'recording') {
+    // iOS при блокировке иногда «глушит» дорожку, не останавливая MediaRecorder.
+    // Такой сегмент завершаем и начинаем новый.
+    const track = r.stream?.getAudioTracks()[0];
+    if (track && (track.readyState === 'ended' || track.muted) && r.mr && r.mr.state !== 'inactive') {
+      try { r.mr.stop(); } catch { /* */ }
+      return;
+    }
+    if (!r.wakeLock) acquireWakeLock(r);
+  }
+});
+
+window.addEventListener('beforeunload', e => {
+  const r = recorder.active;
+  if (r && (r.state === 'recording' || r.state === 'paused' || r.uploader.pending)) {
+    e.preventDefault(); e.returnValue = '';
+  }
+});
+
+function setupMeter(r, stream) {
+  try {
+    r.audioCtx?.close?.();
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);
+    r.audioCtx = ctx; r.analyser = an; r.meterBuf = new Uint8Array(an.fftSize);
+  } catch { r.analyser = null; }
+}
+
+function meterLevel(r) {
+  if (!r?.analyser) return 0;
+  r.analyser.getByteTimeDomainData(r.meterBuf);
+  let sum = 0;
+  for (const v of r.meterBuf) { const x = (v - 128) / 128; sum += x * x; }
+  return Math.min(1, Math.sqrt(sum / r.meterBuf.length) * 4);
+}
+
+async function startRecording(existing) {
+  const mime = existing ? existing.mime : pickRecorderMime();
+  if (mime === null || !navigator.mediaDevices?.getUserMedia) {
+    toast('Этот браузер не поддерживает запись звука. Используйте Chrome или Safari последней версии.', 'bad');
+    return;
+  }
+  let id = existing?.id;
+  if (!id) id = (await api('POST', '/api/recordings', { mime })).id;
+  const r = {
+    id, mime, state: 'starting', stopping: false,
+    segment: 0, seqBySeg: {}, lastSeq: {}, gaps: [],
+    accumulatedMs: 0, runningSince: null, startedAt: Date.now(),
+  };
+  if (existing) {
+    // Продолжение записи после перезагрузки страницы: новый сегмент после уже полученных.
+    const segs = existing.segments || {};
+    for (const [k, v] of Object.entries(segs)) { r.lastSeq[k] = v.max_seq; r.seqBySeg[k] = v.max_seq + 1; }
+    r.segment = Object.keys(segs).length ? Math.max(...Object.keys(segs).map(Number)) + 1 : 0;
+    r.resumed = true;
+  }
+  r.uploader = new ChunkUploader(id, () => recorder.notify());
+  recorder.active = r;
+  try {
+    await startSegment(r);
+  } catch (err) {
+    recorder.active = null;
+    if (!existing) api('DELETE', `/api/recordings/${id}`).catch(() => {});
+    const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+    toast(denied ? 'Нет доступа к микрофону. Разрешите его в настройках браузера для этого сайта.' : 'Не удалось включить микрофон.', 'bad');
+    recorder.notify();
+  }
+}
+
+function pauseRecording() {
+  const r = recorder.active;
+  if (!r?.mr || r.mr.state !== 'recording') return;
+  r.mr.pause();
+  r.accumulatedMs += Date.now() - r.runningSince; r.runningSince = null;
+  r.state = 'paused';
+  recorder.notify();
+}
+function resumeRecording() {
+  const r = recorder.active;
+  if (!r?.mr || r.mr.state !== 'paused') return;
+  r.mr.resume();
+  r.runningSince = Date.now();
+  r.state = 'recording';
+  recorder.notify();
+}
+
+async function stopRecording() {
+  const r = recorder.active;
+  if (!r) return;
+  r.stopping = true;
+  if (r.runningSince) { r.accumulatedMs += Date.now() - r.runningSince; r.runningSince = null; }
+  r.state = 'uploading';
+  recorder.notify();
+  if (r.mr && r.mr.state !== 'inactive') {
+    await new Promise(res => { r.mr.addEventListener('stop', res, { once: true }); r.mr.stop(); });
+  }
+  r.stream?.getTracks().forEach(t => t.stop());
+  r.audioCtx?.close?.();
+  try { await r.wakeLock?.release(); } catch { /* */ }
+  exitPocketMode();
+  await finishUpload(r);
+}
+
+async function finishUpload(r) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const ok = await r.uploader.flush(180000);
+    if (!ok) { r.state = 'upload-stuck'; recorder.notify(); return; }
+    const res = await fetch(`/api/recordings/${r.id}/finish`, {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments: r.lastSeq }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { r.state = 'finalizing'; recorder.notify(); return pollFinalize(r); }
+    if (res.status === 409 && data.detail?.missing) { r.uploader.requeue(data.detail.missing); continue; }
+    r.state = 'error'; r.error = errorText(data, res.status); recorder.notify(); return;
+  }
+  r.state = 'error'; r.error = 'Не все части записи удалось отправить.'; recorder.notify();
+}
+
+async function pollFinalize(r) {
+  for (;;) {
+    await new Promise(res => setTimeout(res, 2000));
+    const data = await api('GET', `/api/recordings/${r.id}`).catch(() => null);
+    const rec = data?.recording;
+    if (!rec) continue;
+    if (rec.status === 'ready') { r.state = 'ready'; r.duration = rec.duration_seconds; recorder.notify(); return; }
+    if (rec.status === 'error') { r.state = 'error'; r.error = rec.error || 'Не удалось обработать запись.'; recorder.notify(); return; }
+  }
+}
+
+/* Карманный режим: чёрный экран (на OLED почти не расходует батарею),
+   экран при этом не гаснет — Wake Lock держит его включённым. */
+function enterPocketMode() {
+  const r = recorder.active;
+  if (!r) return;
+  let ov = $('#pocket');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'pocket';
+    ov.innerHTML = `<div class="pocket-inner"><div class="pocket-dot"></div><div class="pocket-time" id="pocketTime">00:00</div><div class="pocket-hint">Двойное касание — выйти</div></div>`;
+    document.body.appendChild(ov);
+    let last = 0;
+    const exit = () => exitPocketMode();
+    ov.addEventListener('dblclick', exit);
+    ov.addEventListener('touchend', e => { const now = Date.now(); if (now - last < 400) { e.preventDefault(); exit(); } last = now; });
+  }
+  ov.hidden = false;
+  document.documentElement.requestFullscreen?.().catch(() => {});
+  acquireWakeLock(r);
+}
+function exitPocketMode() {
+  const ov = $('#pocket');
+  if (ov) ov.hidden = true;
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+}
+
+function updateRecIndicator() {
+  const r = recorder.active;
+  const live = r && ['recording', 'paused', 'interrupted', 'uploading', 'finalizing'].includes(r.state);
+  for (const [elId, timeId] of [['#recIndicator', '#recIndicatorTime'], ['#recIndicatorTop', '#recIndicatorTopTime']]) {
+    const el = $(elId);
+    if (!el) continue;
+    el.hidden = !live;
+    if (live) $(timeId).textContent = fmtClock(recElapsedMs(r) / 1000);
+  }
+  const pt = $('#pocketTime');
+  if (pt && r) pt.textContent = fmtClock(recElapsedMs(r) / 1000);
+}
+setInterval(updateRecIndicator, 1000);
+
+/* ---------- Страница записи ---------- */
+
+const REC_STATE_TEXT = {
+  starting: 'Включаем микрофон…',
+  recording: 'Идёт запись',
+  paused: 'Пауза',
+  interrupted: 'Запись прервалась — продолжится, как только страница снова будет открыта',
+  uploading: 'Отправляем последние части…',
+  finalizing: 'Собираем запись на сервере…',
+  ready: 'Запись готова',
+  error: 'Ошибка',
+  'upload-stuck': 'Не удаётся отправить запись',
+};
+
+async function viewRecord() {
+  renderShell('record', `<div class="page narrow" id="recPage"></div>`);
+  const page = $('#recPage');
+  let saved = [];
+  let raf = 0;
+
+  async function loadSaved() {
+    saved = (await api('GET', '/api/recordings').catch(() => ({ recordings: [] }))).recordings;
+    const r = recorder.active;
+    if (r) saved = saved.filter(x => x.id !== r.id);
+  }
+
+  function savedList() {
+    if (!saved.length) return '';
+    const row = rec => {
+      const when = fmtTimestamp(rec.created_at);
+      let info = '', actions = '';
+      if (rec.status === 'ready') {
+        info = `Готова · ${fmtDuration(rec.duration_seconds)}`;
+        actions = `<a class="btn sm primary" href="#/new?rec=${rec.id}">К анализу</a><a class="btn sm" href="/api/recordings/${rec.id}/audio">Скачать mp3</a>`;
+      } else if (rec.status === 'recording') {
+        info = `Не завершена · получено ${fmtSize(rec.bytes_received)}`;
+        actions = `<button class="btn sm primary" data-act="continue" data-id="${rec.id}">Продолжить запись</button><button class="btn sm" data-act="finish" data-id="${rec.id}">Завершить</button>`;
+      } else if (rec.status === 'finalizing') {
+        info = 'Собирается на сервере…';
+      } else if (rec.status === 'error') {
+        info = `<span style="color:var(--bad)">${esc(rec.error || 'Ошибка обработки')}</span>`;
+      }
+      return `<li class="saved-rec"><div><div class="cell-title">Запись от ${esc(when)}</div><div class="cell-sub">${info}</div></div>
+        <div class="saved-actions">${actions}${rec.status !== 'finalizing' ? `<button class="btn sm ghost" data-act="delete" data-id="${rec.id}" aria-label="Удалить запись">${icon('trash')}</button>` : ''}</div></li>`;
+    };
+    return `<div class="panel"><div class="panel-head"><h2>Сохранённые записи</h2></div><div class="panel-body"><ul class="saved-list">${saved.map(row).join('')}</ul></div></div>`;
+  }
+
+  function idleView() {
+    const unsupported = pickRecorderMime() === null || !navigator.mediaDevices?.getUserMedia;
+    return `
+      <div class="page-head"><div><h1>Запись урока</h1>
+        <p class="lede">Телефон или ноутбук записывает урок как диктофон, а запись по частям сразу сохраняется на сервере — даже если связь пропадёт или вкладка закроется, записанное не потеряется.</p></div></div>
+      <div class="stack">
+        <div class="panel rec-panel">
+          ${unsupported ? `<div class="callout bad">${icon('alert')}<div>Этот браузер не поддерживает запись звука. Откройте сайт в Chrome (Android, компьютер) или Safari (iPhone, iPad).</div></div>` : `
+          <button class="rec-big" id="recStart" type="button" aria-label="Начать запись"><span></span></button>
+          <div class="rec-caption">Начать запись</div>`}
+        </div>
+        <div class="panel panel-pad">
+          <h2 class="section-title" style="margin-bottom:10px">Как записать лучше</h2>
+          <ol class="points">
+            <li>Положите телефон в нагрудный карман или держите рядом с собой — главное, чтобы был слышен учитель. Чехол и ткань не должны закрывать микрофон.</li>
+            <li>После старта нажмите <b>«Карманный режим»</b>: экран станет чёрным и не будет гаснуть. Батарея почти не расходуется.</li>
+            <li><b>Не блокируйте телефон кнопкой питания.</b> На iPhone это останавливает запись; на Android — может остановить. Если это всё же случилось, откройте страницу снова — запись продолжится, а пауза будет отмечена.</li>
+            <li>Подключите зарядку, если урок длиннее 60 минут, и отключите режим энергосбережения.</li>
+          </ol>
+        </div>
+        ${savedList()}
+      </div>`;
+  }
+
+  function liveView(r) {
+    const s = r.state;
+    const live = s === 'recording' || s === 'paused' || s === 'interrupted' || s === 'starting';
+    const up = r.uploader;
+    const pendingTxt = up.pending ? `в очереди: ${up.pending} ${plural(up.pending, 'часть', 'части', 'частей')}` : 'всё отправлено';
+    return `
+      <div class="page-head"><div><h1>Запись урока</h1>
+        <p class="lede">${r.resumed ? 'Продолжение ранее начатой записи.' : 'Запись сохраняется на сервере каждые 10 секунд.'}</p></div></div>
+      <div class="stack">
+        <div class="panel rec-panel ${s === 'recording' ? 'is-live' : ''}">
+          <div class="rec-state"><span class="rec-dot ${s}"></span>${esc(REC_STATE_TEXT[s] || s)}</div>
+          <div class="rec-time" id="recTime">${fmtClock(recElapsedMs(r) / 1000)}</div>
+          ${live ? `<div class="meter" aria-hidden="true"><i id="meterBar"></i></div>` : ''}
+          <div class="rec-sync ${up.failing ? 'bad' : ''}" id="recSync">${up.failing ? esc(up.lastError) : `На сервере: ${fmtSize(up.sentBytes)} · ${pendingTxt}`}</div>
+          ${r.gaps.length ? `<div class="rec-sync">Перерывы в записи: ${r.gaps.map(g => `${fmtClock(g.at / 1000)} (${fmtDuration(g.seconds)})`).join(', ')}</div>` : ''}
+          ${live ? `<div class="rec-actions">
+            <button class="btn lg" id="pocketBtn" type="button">Карманный режим</button>
+            ${s === 'paused' ? `<button class="btn lg" id="resumeBtn" type="button">Продолжить</button>` : `<button class="btn lg" id="pauseBtn" type="button" ${s !== 'recording' ? 'disabled' : ''}>Пауза</button>`}
+            <button class="btn lg primary" id="stopBtn" type="button">Завершить</button>
+          </div>` : ''}
+          ${s === 'uploading' || s === 'finalizing' ? `<div class="progress" style="margin:16px auto 0;width:240px"><i style="width:100%;animation:pulse 1.2s infinite"></i></div>` : ''}
+          ${s === 'ready' ? `<div class="rec-actions">
+            <a class="btn lg primary" href="#/new?rec=${r.id}">Перейти к анализу</a>
+            <a class="btn lg" href="/api/recordings/${r.id}/audio">Скачать mp3</a>
+          </div><p class="subtle" style="margin-top:10px;font-size:13px">Длительность: ${fmtDuration(r.duration)}. Запись сохранится в списке, пока вы не запустите анализ или не удалите её.</p>` : ''}
+          ${s === 'error' || s === 'upload-stuck' ? `<div class="callout bad" style="margin-top:16px;text-align:left">${icon('alert')}<div>${esc(r.error || 'Часть записи не удалось отправить на сервер. Не закрывайте страницу и проверьте интернет — отправка продолжится автоматически.')}</div></div>
+            <div class="rec-actions"><button class="btn" id="retryFinish" type="button">Повторить отправку</button><button class="btn ghost" id="newRec" type="button">Новая запись</button></div>` : ''}
+          ${s === 'ready' ? `<div class="rec-actions"><button class="btn ghost" id="newRec" type="button">Новая запись</button></div>` : ''}
+        </div>
+        ${s === 'interrupted' ? `<div class="callout warn">${icon('alert')}<div>Микрофон был отключён (экран заблокировали или его заняло другое приложение). Запись возобновится автоматически, пока эта страница открыта.</div></div>` : ''}
+        ${savedList()}
+      </div>`;
+  }
+
+  function render() {
+    const r = recorder.active;
+    page.innerHTML = r ? liveView(r) : idleView();
+    bind();
+  }
+
+  function tick() {
+    const r = recorder.active;
+    if (r) {
+      const t = $('#recTime'); if (t) t.textContent = fmtClock(recElapsedMs(r) / 1000);
+      const m = $('#meterBar'); if (m) m.style.width = (r.state === 'recording' ? Math.round(meterLevel(r) * 100) : 0) + '%';
+    }
+    raf = requestAnimationFrame(tick);
+  }
+
+  function bind() {
+    $('#recStart')?.addEventListener('click', () => startRecording());
+    $('#pocketBtn')?.addEventListener('click', enterPocketMode);
+    $('#pauseBtn')?.addEventListener('click', pauseRecording);
+    $('#resumeBtn')?.addEventListener('click', resumeRecording);
+    $('#stopBtn')?.addEventListener('click', async () => {
+      if (!await confirmDialog({ title: 'Завершить запись?', text: 'Запись будет собрана в один файл. Продолжить её после этого нельзя.', confirm: 'Завершить' })) return;
+      stopRecording();
+    });
+    $('#retryFinish')?.addEventListener('click', () => { const r = recorder.active; if (r) { r.state = 'uploading'; recorder.notify(); finishUpload(r); } });
+    $('#newRec')?.addEventListener('click', async () => { recorder.active = null; await loadSaved(); render(); });
+    $$('[data-act]', page).forEach(b => b.addEventListener('click', async () => {
+      const id = b.dataset.id;
+      const rec = saved.find(x => x.id === id);
+      try {
+        if (b.dataset.act === 'delete') {
+          if (!await confirmDialog({ title: 'Удалить запись?', text: 'Аудио будет удалено с сервера без возможности восстановления.', confirm: 'Удалить', danger: true })) return;
+          await api('DELETE', `/api/recordings/${id}`);
+        } else if (b.dataset.act === 'continue') {
+          if (recorder.active) return toast('Сначала завершите текущую запись.', 'bad');
+          await startRecording(rec);
+        } else if (b.dataset.act === 'finish') {
+          const segments = Object.fromEntries(Object.entries(rec.segments || {}).map(([k, v]) => [k, v.max_seq]));
+          await api('POST', `/api/recordings/${id}/finish`, { segments });
+          toast('Запись собирается — это займёт до минуты.');
+        }
+      } catch (err) { toast(err.message, 'bad'); }
+      await loadSaved(); render();
+    }));
+  }
+
+  await loadSaved();
+  render();
+  let lastState = recorder.active?.state;
+  const onChange = () => {
+    const r = recorder.active;
+    if (!r) return;
+    if (r.state !== lastState) { lastState = r.state; render(); return; }
+    const sync = $('#recSync');
+    if (sync) {
+      const up = r.uploader;
+      sync.className = 'rec-sync' + (up.failing ? ' bad' : '');
+      sync.textContent = up.failing ? up.lastError : `На сервере: ${fmtSize(up.sentBytes)} · ${up.pending ? `в очереди: ${up.pending} ${plural(up.pending, 'часть', 'части', 'частей')}` : 'всё отправлено'}`;
+    }
+  };
+  recorder.listeners.add(onChange);
+  raf = requestAnimationFrame(tick);
+  navCleanup.push(() => { recorder.listeners.delete(onChange); cancelAnimationFrame(raf); });
+}
+
+/* ------------------------------------------------------------------ */
+/* Автозаполнение плана из unit planner                                */
+/* ------------------------------------------------------------------ */
+
+function plannerBox() {
+  return `<div class="span-2 planner-box" id="plannerBox">
+    <div class="planner-row">
+      <div style="min-width:0"><div class="cell-title">Заполнить из unit planner</div>
+        <div class="cell-sub">Прикрепите Word или PDF — поля ниже заполнятся автоматически. Проверьте их перед запуском.</div></div>
+      <div class="planner-actions">
+        <label class="btn" for="plannerFile">${icon('file')}Выбрать файл</label>
+        <input type="file" id="plannerFile" accept=".docx,.pdf,.txt,.md" hidden>
+        <button type="button" class="btn ghost" id="plannerPasteToggle">Вставить текст</button>
+      </div>
+    </div>
+    <div id="plannerPaste" hidden style="margin-top:12px">
+      <textarea class="textarea" id="plannerText" rows="6" placeholder="Вставьте сюда текст unit planner или плана урока"></textarea>
+      <div style="margin-top:8px"><button type="button" class="btn" id="plannerTextGo">Заполнить</button></div>
+    </div>
+    <div id="plannerStatus" class="cell-sub" style="margin-top:8px" hidden></div>
+  </div>`;
+}
+
+function bindPlanner(form, o, refreshSubject, saveDraft) {
+  const status = $('#plannerStatus');
+  const setStatus = (html, cls = '') => { status.hidden = !html; status.innerHTML = html; status.style.color = cls === 'bad' ? 'var(--bad)' : ''; };
+
+  async function run(fd) {
+    fd.set('subject_key', form.elements.subject_key.value);
+    setStatus('<span class="spinner"></span> Читаем документ… обычно 10–30 секунд.');
+    $$('#plannerBox button, #plannerBox label.btn').forEach(b => b.setAttribute('disabled', ''));
+    try {
+      const res = await fetch('/api/planner/extract', { method: 'POST', body: fd, credentials: 'same-origin' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(errorText(data, res.status));
+      const n = applyPlannerFields(form, o, data.fields, refreshSubject);
+      saveDraft();
+      setStatus(n ? `Заполнено полей: ${n}. Проверьте их и при необходимости поправьте.` : 'В документе не нашлось полей плана.');
+      if (n) toast('План заполнен из документа.');
+    } catch (err) {
+      setStatus(esc(err.message), 'bad');
+    } finally {
+      $$('#plannerBox button, #plannerBox label.btn').forEach(b => b.removeAttribute('disabled'));
+      $('#plannerFile').value = '';
+    }
+  }
+
+  $('#plannerFile').addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.set('file', f); run(fd);
+  });
+  $('#plannerPasteToggle').addEventListener('click', () => { const p = $('#plannerPaste'); p.hidden = !p.hidden; if (!p.hidden) $('#plannerText').focus(); });
+  $('#plannerTextGo').addEventListener('click', () => {
+    const t = $('#plannerText').value.trim();
+    if (!t) return setStatus('Вставьте текст плана.', 'bad');
+    const fd = new FormData(); fd.set('text', t); run(fd);
+  });
+}
+
+function applyPlannerFields(form, o, f, refreshSubject) {
+  let n = 0;
+  const flash = el => { el.classList.add('autofilled'); setTimeout(() => el.classList.remove('autofilled'), 2500); };
+  const setVal = (name, v, onlyIfEmpty = false) => {
+    const el = form.elements[name];
+    if (!el || !v) return;
+    if (onlyIfEmpty && el.value.trim()) return;
+    el.value = v; flash(el); n++;
+  };
+  if (f.subject_key && o.subjects[f.subject_key] && form.elements.subject_key.value !== f.subject_key) {
+    form.elements.subject_key.value = f.subject_key;
+    refreshSubject();
+    flash(form.elements.subject_key); n++;
+  }
+  setVal('lesson_title', f.lesson_title, true);
+  setVal('subject', f.subject, true);
+  setVal('grade', f.grade, true);
+  setVal('key_concept', f.key_concept);
+  setVal('global_context', f.global_context);
+  setVal('statement_of_inquiry', f.statement_of_inquiry);
+  setVal('inquiry_questions', f.inquiry_questions);
+  setVal('learning_objectives', f.learning_objectives);
+  setVal('learning_experiences', f.learning_experiences);
+  setVal('atl_skills_detail', f.atl_detail);
+
+  const subj = o.subjects[form.elements.subject_key.value];
+  const checkGroup = (group, values) => {
+    if (!values?.length) return;
+    const set = new Set(values);
+    $$(`input[data-group="${group}"]`).forEach(i => { i.checked = set.has(i.value); });
+    n++;
+  };
+  checkGroup('related', f.related_concepts);
+  checkGroup('learner', f.learner_profile);
+  checkGroup('atl', f.atl_clusters);
+  if (subj && f.assessment_criteria?.length) {
+    checkGroup('criteria', subj.assessment_criteria.filter(c => f.assessment_criteria.includes(c.code)).map(c => `Criterion ${c.code}: ${c.label}`));
+  }
+  return n;
+}
+
 /* ------------------------------------------------------------------ */
 
 (async function boot() {

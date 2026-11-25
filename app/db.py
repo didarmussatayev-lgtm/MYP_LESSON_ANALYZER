@@ -66,6 +66,22 @@ CREATE TABLE IF NOT EXISTS lessons (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lessons_user ON lessons(user_id, created_at DESC);
+
+-- Записи, сделанные прямо на сайте (app/recordings.py). Куски аудио лежат
+-- в DATA_DIR/recordings/<id>/, после завершения склеиваются в один mp3.
+CREATE TABLE IF NOT EXISTS recordings (
+    id                TEXT PRIMARY KEY,
+    user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status            TEXT NOT NULL DEFAULT 'recording',  -- recording | finalizing | ready | error | used
+    mime              TEXT NOT NULL DEFAULT '',
+    bytes_received    INTEGER NOT NULL DEFAULT 0,
+    duration_seconds  REAL,
+    audio_path        TEXT,
+    error             TEXT,
+    lesson_id         TEXT,
+    created_at        REAL NOT NULL,
+    updated_at        REAL NOT NULL
+);
 """
 
 
@@ -293,3 +309,52 @@ def unfinished_lessons() -> list[dict]:
             "SELECT * FROM lessons WHERE status IN ('queued', 'running') ORDER BY created_at"
         ).fetchall()
         return [_decode_lesson(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# recordings
+# ---------------------------------------------------------------------------
+
+def create_recording(rec_id: str, user_id: int, mime: str) -> None:
+    now = time.time()
+    with connect() as c:
+        c.execute(
+            "INSERT INTO recordings (id, user_id, mime, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (rec_id, user_id, mime, now, now),
+        )
+
+
+def get_recording(rec_id: str) -> dict | None:
+    with connect() as c:
+        return _row(c.execute("SELECT * FROM recordings WHERE id = ?", (rec_id,)).fetchone())
+
+
+def list_recordings(user_id: int) -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            "SELECT * FROM recordings WHERE user_id = ? AND status != 'used' ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_recording(rec_id: str, **fields: Any) -> None:
+    if not fields:
+        return
+    fields["updated_at"] = time.time()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with connect() as c:
+        c.execute(f"UPDATE recordings SET {cols} WHERE id = ?", (*fields.values(), rec_id))
+
+
+def add_recording_bytes(rec_id: str, n: int) -> None:
+    with connect() as c:
+        c.execute(
+            "UPDATE recordings SET bytes_received = bytes_received + ?, updated_at = ? WHERE id = ?",
+            (n, time.time(), rec_id),
+        )
+
+
+def delete_recording(rec_id: str) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM recordings WHERE id = ?", (rec_id,))

@@ -33,6 +33,7 @@ import yaml
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -43,6 +44,7 @@ sys.path.insert(0, str(APP_DIR))
 import auth  # noqa: E402
 import db  # noqa: E402
 import pipeline  # noqa: E402
+import recordings  # noqa: E402
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(APP_DIR))).resolve()
 UPLOADS_DIR = DATA_DIR / "uploads"
@@ -61,6 +63,7 @@ for d in (UPLOADS_DIR, OUTPUT_DIR, WORK_DIR):
 
 db.init(DB_PATH)
 auth.bootstrap_admin()
+recordings.init(DATA_DIR)
 
 executor = ThreadPoolExecutor(max_workers=1)
 
@@ -379,7 +382,8 @@ PLANNED_FIELDS = [
 
 @app.post("/api/lessons")
 async def create_lesson(
-    teacher_track: UploadFile = File(...),
+    teacher_track: UploadFile | None = File(None),
+    recording_id: str = Form(""),
     classroom_track: UploadFile | None = File(None),
     pptx: UploadFile | None = File(None),
     teacher_name: str = Form(""),
@@ -403,12 +407,22 @@ async def create_lesson(
     lesson_id = uuid.uuid4().hex
     job_dir = UPLOADS_DIR / lesson_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    has_file = teacher_track is not None and bool(teacher_track.filename)
+    if not has_file and not recording_id:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise HTTPException(400, "Добавьте запись учителя: файл или запись, сделанную на сайте.")
     try:
-        paths = {"teacher": str(_save_upload(teacher_track, job_dir, "teacher", AUDIO_EXTENSIONS))}
+        paths: dict[str, str] = {}
+        if has_file:
+            paths["teacher"] = str(_save_upload(teacher_track, job_dir, "teacher", AUDIO_EXTENSIONS))
         if classroom_track is not None and classroom_track.filename:
             paths["classroom"] = str(_save_upload(classroom_track, job_dir, "classroom", AUDIO_EXTENSIONS))
         if pptx is not None and pptx.filename:
             paths["pptx"] = str(_save_upload(pptx, job_dir, "slides", {".pptx"}))
+        # Запись с сайта забираем последней: если до этого что-то не прошло
+        # проверку, она остаётся нетронутой и её можно использовать снова.
+        if not has_file:
+            paths["teacher"] = str(recordings.take_for_lesson(recording_id, user, job_dir, lesson_id))
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
@@ -502,6 +516,51 @@ async def lesson_download(lesson_id: str, user: dict = Depends(auth.current_user
         filename=f"{stem}_report.docx",
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+app.include_router(recordings.router)
+
+
+# ---------------------------------------------------------------------------
+# Автозаполнение плана урока из unit planner
+# ---------------------------------------------------------------------------
+
+PLANNER_EXTENSIONS = {".docx", ".pdf", ".txt", ".md"}
+
+
+@app.post("/api/planner/extract")
+async def planner_extract(
+    file: UploadFile | None = File(None),
+    text: str = Form(""),
+    subject_key: str = Form(""),
+    user: dict = Depends(auth.current_user),
+) -> dict:
+    import planner  # noqa: PLC0415 - тянет google-genai, грузим по требованию
+
+    if file is not None and file.filename:
+        ext = Path(file.filename).suffix.lower()
+        if ext not in PLANNER_EXTENSIONS:
+            raise HTTPException(400, "Поддерживаются файлы .docx, .pdf и .txt. Google Doc можно скачать как .docx.")
+        data = file.file.read(25 * 1024 * 1024 + 1)
+        if len(data) > 25 * 1024 * 1024:
+            raise HTTPException(413, "Файл больше 25 МБ.")
+        source = {"bytes": data, "ext": ext}
+    elif text.strip():
+        source = {"text": text.strip()[:60000]}
+    else:
+        raise HTTPException(400, "Прикрепите файл unit planner или вставьте его текст.")
+
+    with open(SUBJECT_FRAMEWORKS_PATH, encoding="utf-8") as f:
+        frameworks = yaml.safe_load(f)
+    with open(TAXONOMY_PATH, encoding="utf-8") as f:
+        taxonomy = yaml.safe_load(f)
+    try:
+        fields = await run_in_threadpool(planner.extract_planner, source, frameworks, taxonomy, subject_key or None)
+    except planner.PlannerError as e:
+        raise HTTPException(422, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, _friendly_error(e)) from e
+    return {"fields": fields}
 
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
