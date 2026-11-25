@@ -83,6 +83,7 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -162,10 +163,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .shell { grid-template-columns: 1fr; }
   .sidebar {
     position: fixed; inset: 0 auto 0 0; width: 260px; z-index: 40;
-    transform: translateX(-100%); transition: transform .18s ease;
-    box-shadow: var(--shadow-pop);
+    transform: translateX(-100%); transition: transform .18s ease, box-shadow .18s;
+    box-shadow: none;
   }
-  .shell.nav-open .sidebar { transform: none; }
+  .shell.nav-open .sidebar { transform: none; box-shadow: var(--shadow-pop); }
   .shell.nav-open .scrim { display: block; }
   .scrim { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 30; }
   .topbar {
@@ -276,6 +277,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .dropzone.has-file { border-style: solid; background: var(--surface); }
 .dropzone.has-file .dz-icon { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .dropzone .dz-clear { position: relative; z-index: 2; margin-left: auto; }
+@media (max-width: 520px) { .dropzone { flex-wrap: wrap; } .dropzone .dz-clear { margin-left: 50px; } }
 
 .callout {
   display: flex; gap: 10px; padding: 12px 14px; border-radius: var(--radius);
@@ -508,11 +510,72 @@ dialog .d-actions { display: flex; justify-content: flex-end; gap: 8px; padding:
 .skeleton { background: linear-gradient(90deg, var(--surface-sunken), var(--surface-2), var(--surface-sunken)); background-size: 200% 100%; animation: sk 1.2s infinite; border-radius: 4px; height: 14px; }
 @keyframes sk { to { background-position: -200% 0; } }
 
+/* ---------- Запись урока ---------- */
+:root { --rec: #c4372b; }
+@media (prefers-color-scheme: dark) { :root { --rec: #ef6b5f; } }
+
+.rec-indicator {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  padding: 7px 10px; border-radius: var(--radius);
+  background: var(--bad-soft); color: var(--bad); font-weight: 500; font-size: 13px;
+}
+.rec-indicator:hover { text-decoration: none; filter: brightness(.97); }
+.rec-indicator .mono { margin-left: auto; }
+.rec-indicator[hidden] { display: none; }
+.rec-indicator.top { margin: 0 0 0 auto; padding: 4px 10px; }
+.rec-indicator.top .mono { margin-left: 0; }
+
+.rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-3); flex: none; display: inline-block; }
+.rec-dot.recording { background: var(--rec); animation: pulse 1.4s ease-in-out infinite; }
+.rec-dot.paused, .rec-dot.interrupted { background: var(--warn); }
+.rec-dot.ready { background: var(--good); }
+.rec-dot.error, .rec-dot.upload-stuck { background: var(--bad); }
+
+.rec-panel { text-align: center; padding: 36px 20px 28px; }
+.rec-panel.is-live { border-color: color-mix(in srgb, var(--rec) 35%, var(--border)); }
+.rec-big {
+  width: 96px; height: 96px; border-radius: 50%; cursor: pointer;
+  border: 4px solid var(--border-strong); background: var(--surface);
+  display: inline-grid; place-items: center; transition: border-color .12s, transform .08s;
+}
+.rec-big span { width: 60px; height: 60px; border-radius: 50%; background: var(--rec); }
+.rec-big:hover { border-color: var(--rec); }
+.rec-big:active { transform: scale(.97); }
+.rec-caption { margin-top: 12px; font-weight: 500; }
+.rec-state { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; color: var(--text-2); }
+.rec-time { font: 500 56px/1.1 var(--mono); letter-spacing: -0.02em; margin: 10px 0 14px; font-variant-numeric: tabular-nums; }
+.meter { height: 6px; max-width: 280px; margin: 0 auto 14px; background: var(--surface-sunken); border-radius: 3px; overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: var(--good); border-radius: 3px; transition: width .08s linear; }
+.rec-sync { font-size: 13px; color: var(--text-2); margin-top: 4px; }
+.rec-sync.bad { color: var(--bad); }
+.rec-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 20px; }
+@media (max-width: 480px) { .rec-actions .btn { flex: 1 1 100%; } .rec-time { font-size: 48px; } }
+
+.saved-list { list-style: none; margin: 0; padding: 0; }
+.saved-rec { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.saved-rec:first-child { border-top: 0; padding-top: 0; }
+.saved-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+#pocket { position: fixed; inset: 0; z-index: 1000; background: #000; color: #3a3a3a; display: grid; place-items: center; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+#pocket[hidden] { display: none; }
+.pocket-inner { text-align: center; }
+.pocket-dot { width: 8px; height: 8px; border-radius: 50%; background: #5a1d18; margin: 0 auto 10px; animation: pulse 2s ease-in-out infinite; }
+.pocket-time { font: 500 28px var(--mono); color: #3d3d3d; }
+.pocket-hint { font-size: 12px; margin-top: 8px; color: #2e2e2e; }
+
+/* ---------- Автозаполнение из unit planner ---------- */
+.planner-box { border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); padding: 14px 16px; background: var(--surface-2); }
+.planner-row { display: flex; align-items: center; gap: 14px; justify-content: space-between; flex-wrap: wrap; }
+.planner-actions { display: flex; gap: 8px; }
+.planner-actions label.btn[disabled] { opacity: .55; pointer-events: none; }
+.autofilled { box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 35%, transparent) !important; transition: box-shadow .4s; }
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+
 /* ---------- Печать отчёта ---------- */
 @media print {
   :root { color-scheme: light; }
   body { background: #fff; font-size: 11pt; }
-  .sidebar, .topbar, .head-actions, .tabs, .toolbar, #toasts, .no-print { display: none !important; }
+  #pocket, .sidebar, .topbar, .head-actions, .tabs, .toolbar, #toasts, .no-print { display: none !important; }
   .shell { display: block; }
   .page { padding: 0; max-width: none; }
   .panel { box-shadow: none; break-inside: avoid; }
