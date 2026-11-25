@@ -78,6 +78,18 @@ CREATE TABLE IF NOT EXISTS lesson_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_comments_lesson ON lesson_comments(lesson_id, created_at);
 
+-- Уведомления на сайте (app/notify.py). data — JSON: название урока, автор, отрывок.
+CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    lesson_id   TEXT,
+    kind        TEXT NOT NULL,
+    data        TEXT NOT NULL DEFAULT '{}',
+    created_at  REAL NOT NULL,
+    read_at     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC);
+
 -- Записи, сделанные прямо на сайте (app/recordings.py). Куски аудио лежат
 -- в DATA_DIR/recordings/<id>/, после завершения склеиваются в один mp3.
 CREATE TABLE IF NOT EXISTS recordings (
@@ -112,6 +124,10 @@ _MIGRATIONS = {
     "lessons": {
         "lesson_language": "TEXT NOT NULL DEFAULT ''",
         "report_language": "TEXT NOT NULL DEFAULT 'ru'",
+    },
+    "users": {
+        "ui_language": "TEXT NOT NULL DEFAULT 'ru'",
+        "email_notifications": "INTEGER NOT NULL DEFAULT 1",
     },
 }
 
@@ -185,7 +201,7 @@ def list_users() -> list[dict]:
 
 
 def update_user(user_id: int, **fields: Any) -> None:
-    allowed = {"name", "role", "is_active", "password_hash"}
+    allowed = {"name", "role", "is_active", "password_hash", "ui_language", "email_notifications"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
@@ -462,3 +478,54 @@ def teachers_with_lessons() -> list[dict]:
             """
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# notifications
+# ---------------------------------------------------------------------------
+
+def add_notification(user_id: int, lesson_id: str | None, kind: str, data: dict) -> None:
+    with connect() as c:
+        c.execute(
+            "INSERT INTO notifications (user_id, lesson_id, kind, data, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, lesson_id, kind, json.dumps(data, ensure_ascii=False), time.time()),
+        )
+
+
+def list_notifications(user_id: int, limit: int = 50) -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["data"] = json.loads(d["data"] or "{}")
+        out.append(d)
+    return out
+
+
+def unread_notifications(user_id: int) -> int:
+    with connect() as c:
+        return c.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read_at IS NULL", (user_id,)
+        ).fetchone()[0]
+
+
+def mark_notifications_read(user_id: int, ids: list[int] | None = None, lesson_id: str | None = None) -> None:
+    now = time.time()
+    with connect() as c:
+        if ids:
+            marks = ",".join("?" * len(ids))
+            c.execute(
+                f"UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND id IN ({marks})",
+                (now, user_id, *ids),
+            )
+        elif lesson_id:
+            c.execute(
+                "UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND lesson_id = ?",
+                (now, user_id, lesson_id),
+            )
+        else:
+            c.execute("UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL", (now, user_id))

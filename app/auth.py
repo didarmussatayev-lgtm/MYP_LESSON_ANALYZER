@@ -109,7 +109,10 @@ def can_view_all(user: dict) -> bool:
 
 
 def public_user(user: dict) -> dict:
-    return {k: user[k] for k in ("id", "email", "name", "role")}
+    out = {k: user[k] for k in ("id", "email", "name", "role")}
+    out["ui_language"] = user.get("ui_language") or "ru"
+    out["email_notifications"] = bool(user.get("email_notifications", 1))
+    return out
 
 
 # ---------------------------------------------------------------------------

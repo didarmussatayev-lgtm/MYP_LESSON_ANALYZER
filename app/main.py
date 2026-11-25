@@ -25,6 +25,7 @@ import sys
 import time
 import traceback
 import uuid
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -42,6 +43,8 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 sys.path.insert(0, str(APP_DIR))
 
 import auth  # noqa: E402
+import docx_extras  # noqa: E402
+import notify  # noqa: E402
 import db  # noqa: E402
 import pipeline  # noqa: E402
 import recordings  # noqa: E402
@@ -150,6 +153,7 @@ def _run_lesson(lesson_id: str, resume: bool = False) -> None:
             error_public=_friendly_error(e),
             error_detail=f"{e}\n\n{traceback.format_exc()}",
         )
+        _safe_notify(lambda: notify.notify({lesson["user_id"]}, lesson, "lesson_error"))
         # Аудио и workdir НЕ удаляем: пользователь может нажать «Повторить»,
         # и пайплайн продолжит с последнего успешного этапа.
         return
@@ -163,6 +167,14 @@ def _run_lesson(lesson_id: str, resume: bool = False) -> None:
         upload_paths={},
     )
     _delete_sources(lesson_id)
+    _safe_notify(lambda: notify.notify({lesson["user_id"]}, lesson, "lesson_done"))
+
+
+def _safe_notify(fn) -> None:
+    try:
+        fn()
+    except Exception:  # noqa: BLE001 - уведомление не должно ломать обработку
+        traceback.print_exc()
 
 
 def _delete_sources(lesson_id: str) -> None:
@@ -252,7 +264,54 @@ async def me(request: Request) -> dict:
         user = auth.current_user(request)
     except HTTPException:
         return {"user": None, "needs_setup": db.count_users() == 0}
-    return {"user": auth.public_user(user)}
+    return {"user": auth.public_user(user), "unread": db.unread_notifications(user["id"]),
+            "email_available": notify.smtp_configured()}
+
+
+class PreferencesBody(BaseModel):
+    ui_language: str | None = None
+    email_notifications: bool | None = None
+
+
+@app.post("/api/auth/preferences")
+async def preferences(body: PreferencesBody, user: dict = Depends(auth.current_user)) -> dict:
+    fields: dict = {}
+    if body.ui_language is not None:
+        if body.ui_language not in ("ru", "kk", "en"):
+            raise HTTPException(400, "Неизвестный язык.")
+        fields["ui_language"] = body.ui_language
+    if body.email_notifications is not None:
+        fields["email_notifications"] = 1 if body.email_notifications else 0
+    db.update_user(user["id"], **fields)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Уведомления
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notifications")
+async def notifications_list(user: dict = Depends(auth.current_user)) -> dict:
+    return {"notifications": db.list_notifications(user["id"]), "unread": db.unread_notifications(user["id"])}
+
+
+@app.get("/api/notifications/unread")
+async def notifications_unread(user: dict = Depends(auth.current_user)) -> dict:
+    return {"unread": db.unread_notifications(user["id"])}
+
+
+class ReadBody(BaseModel):
+    ids: list[int] | None = None
+    lesson_id: str | None = None
+    all: bool = False
+
+
+@app.post("/api/notifications/read")
+async def notifications_read(body: ReadBody, user: dict = Depends(auth.current_user)) -> dict:
+    if not (body.ids or body.lesson_id or body.all):
+        raise HTTPException(400, "Не указано, какие уведомления отметить.")
+    db.mark_notifications_read(user["id"], ids=body.ids, lesson_id=body.lesson_id)
+    return {"unread": db.unread_notifications(user["id"])}
 
 
 class PasswordChangeBody(BaseModel):
@@ -531,10 +590,20 @@ async def lesson_download(lesson_id: str, user: dict = Depends(auth.current_user
         raise HTTPException(409, "Отчёт ещё не готов.")
     parts = [lesson["lesson_date"], lesson["subject"], lesson["teacher_name"]]
     stem = "_".join(re.sub(r"[^\w\-]+", "-", p).strip("-") for p in parts if p) or "lesson"
-    return FileResponse(
-        path,
-        filename=f"{stem}_report.docx",
+    # Разделы «Критерии» и «Обсуждение» дописываются при каждом скачивании:
+    # комментарии появляются уже после анализа.
+    try:
+        data = await run_in_threadpool(
+            docx_extras.build_report, path, lesson.get("results") or {}, db.list_comments(lesson_id)
+        )
+    except Exception:  # noqa: BLE001 - отдаём хотя бы основной отчёт
+        traceback.print_exc()
+        data = Path(path).read_bytes()
+    filename = f"{stem}_report.docx"
+    return Response(
+        content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename=\"lesson_report.docx\"; filename*=UTF-8''{quote(filename)}"},
     )
 
 
@@ -569,6 +638,8 @@ async def comments_add(lesson_id: str, body: CommentBody, user: dict = Depends(a
         raise HTTPException(400, "Комментарий длиннее 5000 символов.")
     section = body.section if body.section in COMMENT_SECTIONS else "general"
     cid = db.add_comment(lesson_id, user["id"], section, text)
+    lesson = db.get_lesson(lesson_id)
+    _safe_notify(lambda: notify.notify_comment(lesson, user, text))
     return {"id": cid}
 
 
