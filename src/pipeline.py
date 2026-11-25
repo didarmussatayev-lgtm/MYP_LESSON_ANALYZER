@@ -33,6 +33,20 @@ import sync
 from common import Segment, Utterance
 
 
+# Этапы для индикатора прогресса в интерфейсе (порядок важен).
+STEP_LABELS = {
+    "sync": "Синхронизация аудиодорожек",
+    "transcribe": "Расшифровка речи",
+    "align": "Разметка реплик учителя и учеников",
+    "questions": "Анализ вопросов учителя",
+    "inquiry": "Определение уровней inquiry",
+    "alignment": "Сравнение плана и урока",
+    "reflection": "Формулирование выводов",
+    "report": "Подготовка отчёта",
+}
+STEP_KEYS = list(STEP_LABELS)
+
+
 def _stage_path(workdir: Path, name: str) -> Path:
     return workdir / f"{name}.json"
 
@@ -60,11 +74,25 @@ def run_pipeline(
     subject_frameworks_path: str = "../config/subject_frameworks.yaml",
     subject_key: str | None = None,
     on_progress: Callable[[str], None] | None = None,
-) -> None:
+    on_step: Callable[[int, int, str], None] | None = None,
+) -> dict:
+    """
+    Возвращает структурированные результаты анализа (для веб-отчёта),
+    помимо сохранения docx в out_path.
+
+    on_step(step, total, label) - для индикатора прогресса в интерфейсе:
+    вызывается в начале каждого этапа с человекочитаемым названием.
+    """
     def progress(msg: str) -> None:
         print(msg)
         if on_progress:
             on_progress(msg)
+
+    step_total = len(STEP_LABELS)
+
+    def step(key: str) -> None:
+        if on_step:
+            on_step(STEP_KEYS.index(key) + 1, step_total, STEP_LABELS[key])
 
     single_track_mode = classroom_track is None
 
@@ -85,6 +113,7 @@ def run_pipeline(
 
     # --- Stage 1: sync (только если есть второй трек) ---
     offset_path = _stage_path(workdir_p, "01_offset")
+    step("sync")
     if single_track_mode:
         offset = 0.0
         progress("Этап 1/7: только трек учителя - синхронизация не нужна, пропускаю.")
@@ -110,6 +139,7 @@ def run_pipeline(
 
     # --- Stage 2: transcribe (Gemini) ---
     teacher_segs_path = _stage_path(workdir_p, "02_teacher_segments")
+    step("transcribe")
     classroom_segs_path = _stage_path(workdir_p, "02_classroom_segments")
     if resume and teacher_segs_path.exists() and (single_track_mode or classroom_segs_path.exists()):
         teacher_segments = [Segment(**s) for s in _load_json(teacher_segs_path)]
@@ -135,6 +165,7 @@ def run_pipeline(
 
     # --- Stage 3: align (Teacher/Student roles) ---
     utterances_path = _stage_path(workdir_p, "03_utterances")
+    step("align")
     if resume and utterances_path.exists():
         utterances = [Utterance(**u) for u in _load_json(utterances_path)]
         progress("[resume] loaded aligned utterances")
@@ -162,6 +193,7 @@ def run_pipeline(
         )
 
     # --- Stage 3b (optional): slides ---
+    slide_timeline = None
     if pptx_path:
         import slides as slides_mod
 
@@ -172,6 +204,7 @@ def run_pipeline(
 
     # --- Stage 4: LLM analysis ---
     questions_path = _stage_path(workdir_p, "04_questions")
+    step("questions")
     if resume and questions_path.exists():
         questions = _load_json(questions_path)
         progress("[resume] loaded question classification")
@@ -182,6 +215,7 @@ def run_pipeline(
         progress(f"  {len(questions)} questions classified")
 
     inquiry_path = _stage_path(workdir_p, "05_inquiry_levels")
+    step("inquiry")
     if resume and inquiry_path.exists():
         inquiry_episodes = _load_json(inquiry_path)
         progress("[resume] loaded inquiry-level episodes")
@@ -192,6 +226,7 @@ def run_pipeline(
         progress(f"  {len(inquiry_episodes)} episodes classified")
 
     alignment_path = _stage_path(workdir_p, "06_alignment")
+    step("alignment")
     if resume and alignment_path.exists():
         alignment_rows = _load_json(alignment_path)
         progress("[resume] loaded planned-vs-observed alignment")
@@ -201,6 +236,7 @@ def run_pipeline(
         _save_json(alignment_path, alignment_rows)
 
     reflection_path = _stage_path(workdir_p, "07_reflection")
+    step("reflection")
     if resume and reflection_path.exists():
         reflection = _load_json(reflection_path)
         progress("[resume] loaded reflection synthesis")
@@ -221,6 +257,7 @@ def run_pipeline(
         _save_json(intended_summary_path, {"summary": intended_vs_enacted_summary})
 
     # --- Final: render docx ---
+    step("report")
     progress("Генерация Word-отчёта...")
     ctx = report.build_context(
         teacher_name=planned.get("teacher_name", ""),
@@ -238,6 +275,75 @@ def run_pipeline(
     report.render_report(ctx, template_path, out_path)
     progress(f"Готово. Отчёт сохранён: {out_path}")
     progress("Напоминание: это AI-assisted ЧЕРНОВИК. Проверьте перед тем, как делиться с учителем/коучем.")
+
+    return build_results(
+        planned=planned,
+        talk_time=talk_time,
+        utterances=utterances,
+        questions=questions,
+        inquiry_episodes=inquiry_episodes,
+        alignment_rows=alignment_rows,
+        reflection=reflection,
+        intended_vs_enacted_summary=intended_vs_enacted_summary,
+        methodology_notes=ctx["methodology_notes"],
+        single_track_mode=single_track_mode,
+        slide_timeline=slide_timeline,
+    )
+
+
+def build_results(
+    planned: dict,
+    talk_time: dict,
+    utterances: list[Utterance],
+    questions: list[dict],
+    inquiry_episodes: list[dict],
+    alignment_rows: list[dict],
+    reflection: dict,
+    intended_vs_enacted_summary: str,
+    methodology_notes: str,
+    single_track_mode: bool,
+    slide_timeline=None,
+) -> dict:
+    """
+    Структурированные результаты для веб-отчёта и списка уроков.
+    summary - короткие показатели для карточки урока в истории.
+    """
+    from dataclasses import asdict
+
+    question_counts: dict[str, int] = {}
+    for q in questions:
+        cat = q.get("category", "unknown")
+        question_counts[cat] = question_counts.get(cat, 0) + 1
+    higher_order = question_counts.get("application", 0) + question_counts.get("analysis", 0)
+
+    alignment_counts: dict[str, int] = {}
+    for row in alignment_rows:
+        a = row.get("alignment", "")
+        alignment_counts[a] = alignment_counts.get(a, 0) + 1
+
+    return {
+        "version": 1,
+        "summary": {
+            "duration_seconds": talk_time.get("total_duration_seconds"),
+            "teacher_pct": talk_time.get("teacher_pct"),
+            "student_pct": talk_time.get("student_pct"),
+            "question_count": len(questions),
+            "higher_order_pct": round(100 * higher_order / len(questions)) if questions else None,
+            "alignment_counts": alignment_counts,
+        },
+        "planned": planned,
+        "talk_time": talk_time,
+        "question_counts": question_counts,
+        "questions": questions,
+        "inquiry_episodes": inquiry_episodes,
+        "alignment_rows": alignment_rows,
+        "reflection": reflection,
+        "intended_vs_enacted_summary": intended_vs_enacted_summary,
+        "methodology_notes": methodology_notes,
+        "single_track_mode": single_track_mode,
+        "slide_timeline": slide_timeline,
+        "utterances": [asdict(u) for u in utterances],
+    }
 
 
 def main() -> None:
