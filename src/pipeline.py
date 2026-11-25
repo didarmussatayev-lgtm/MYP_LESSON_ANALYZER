@@ -77,6 +77,8 @@ def run_pipeline(
     subject_key: str | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_step: Callable[[int, int, str], None] | None = None,
+    lesson_language: str | None = None,
+    report_language: str = "русском",
 ) -> dict:
     """
     Возвращает структурированные результаты анализа (для веб-отчёта),
@@ -91,6 +93,9 @@ def run_pipeline(
             on_progress(msg)
 
     step_total = len(STEP_LABELS)
+
+    # Язык пояснений модели (rationale, выводы, рекомендации) для этого урока.
+    la.set_feedback_language(report_language)
 
     def step(key: str) -> None:
         if on_step:
@@ -153,17 +158,17 @@ def run_pipeline(
     else:
         if single_track_mode:
             progress("Этап 2/7: транскрипция трека учителя + попытка различить учитель/ученик по смыслу речи (Gemini)...")
-            teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True)
+            teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True, language_hint=lesson_language)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
             classroom_segments = []
             progress("Этап 3/7: общего трека нет - пропускаю.")
         else:
             progress("Этап 2/7: транскрипция трека учителя (Gemini)...")
-            teacher_segments = transcribe.transcribe_track(teacher_track)
+            teacher_segments = transcribe.transcribe_track(teacher_track, language_hint=lesson_language)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
 
             progress("Этап 3/7: транскрипция общего трека класса (Gemini)...")
-            classroom_segments = transcribe.transcribe_track(classroom_track)
+            classroom_segments = transcribe.transcribe_track(classroom_track, language_hint=lesson_language)
             transcribe.save_segments(classroom_segments, str(classroom_segs_path))
 
     # --- Stage 3: align (Teacher/Student roles) ---

@@ -198,7 +198,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .btn:hover { background: var(--surface-2); border-color: var(--text-3); text-decoration: none; }
 .btn:disabled { opacity: .55; cursor: default; }
-.btn svg { width: 15px; height: 15px; }
+.btn svg { width: 15px; height: 15px; flex: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.danger { color: var(--bad); }
@@ -570,6 +570,39 @@ dialog .d-actions { display: flex; justify-content: flex-end; gap: 8px; padding:
 .planner-actions label.btn[disabled] { opacity: .55; pointer-events: none; }
 .autofilled { box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 35%, transparent) !important; transition: box-shadow .4s; }
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+
+/* ---------- Динамика ---------- */
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .metric-grid { grid-template-columns: minmax(0, 1fr); } }
+.metric-card { padding: 14px 16px 8px; }
+.mc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.mc-value { font-size: 26px; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.mc-value small { font-size: 14px; color: var(--text-2); font-weight: 400; margin-left: 1px; }
+.delta { display: block; font-size: 12.5px; color: var(--text-2); margin-top: 6px; }
+.delta.good { color: var(--good); }
+.delta.bad { color: var(--bad); }
+.linechart { width: 100%; height: auto; display: block; margin-top: 6px; overflow: visible; }
+.linechart .grid { stroke: var(--border); stroke-width: 1; }
+.linechart .ytick, .linechart .xtick { fill: var(--text-3); font: 11px var(--mono); }
+.linechart .ytick { text-anchor: end; }
+.linechart .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.linechart .dot { fill: var(--series-1); stroke: var(--surface); stroke-width: 2; }
+.linechart .hit { fill: transparent; }
+.linechart .pt:hover .dot, .linechart .pt:focus .dot { r: 6; }
+
+/* ---------- Обсуждение ---------- */
+.comments { list-style: none; margin: 0; padding: 0; }
+.comments li { display: flex; gap: 12px; padding: 14px 0; border-top: 1px solid var(--border); }
+.comments li:first-child { border-top: 0; padding-top: 2px; }
+.c-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.c-meta b { font-weight: 500; }
+.c-body { margin-top: 4px; white-space: pre-wrap; line-height: 1.55; overflow-wrap: anywhere; }
+.btn.c-del { margin-left: auto; width: 28px; padding: 0; }
+.tag-link { border: 0; cursor: pointer; font: inherit; font-size: 12px; }
+.tag-link:hover { color: var(--text); background: var(--accent-soft); }
+.comment-form-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 640px) { .hide-sm { display: none; } }
 
 /* ---------- Печать отчёта ---------- */
 @media print {

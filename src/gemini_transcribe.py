@@ -127,7 +127,7 @@ def _clean_json_text(text: str) -> str:
     return re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
 
 
-def transcribe_track(audio_path: str, identify_speakers: bool = False) -> list[Segment]:
+def transcribe_track(audio_path: str, identify_speakers: bool = False, language_hint: str | None = None) -> list[Segment]:
     """
     Загружает аудиофайл через Gemini Files API (работает для файлов любого
     разумного размера, в т.ч. > 20MB, что типично для 40-минутного трека)
@@ -163,6 +163,11 @@ def transcribe_track(audio_path: str, identify_speakers: bool = False) -> list[S
         os.remove(safe_path)
 
     prompt = TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT if identify_speakers else TRANSCRIBE_PROMPT
+    if language_hint:
+        prompt += (
+            f"- Основной язык урока: {language_hint}. Реплики на других языках "
+            "записывай на том языке, на котором они прозвучали, не переводи.\n"
+        )
 
     response = client.models.generate_content(
         model=MODEL,

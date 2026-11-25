@@ -147,6 +147,8 @@ const ICON_PATHS = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   refresh: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>',
+  chart: '<path d="M4 4v16h16"/><path d="m8 14 3.5-4 3 2.5L19 7"/>',
+  chat: '<path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
 };
 function icon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
@@ -196,6 +198,11 @@ const STATUS = {
   done: { label: 'Готов', cls: 'good' },
   error: { label: 'Ошибка', cls: 'bad' },
 };
+const ROLE_LABEL = { teacher: 'Учитель', observer: 'Методист', admin: 'Администратор' };
+const canViewAll = u => u && (u.role === 'admin' || u.role === 'observer');
+const LESSON_LANGUAGES = { '': 'Не указан', ru: 'Русский', kk: 'Қазақша', en: 'English', mixed: 'Смешанный' };
+const REPORT_LANGUAGES = { ru: 'Русский', kk: 'Қазақша', en: 'English' };
+
 const statusBadge = s => `<span class="badge ${STATUS[s]?.cls || ''}">${STATUS[s]?.label || esc(s)}</span>`;
 
 /* ------------------------------------------------------------------ */
@@ -224,6 +231,7 @@ const ROUTES = [
   [/^\/$/, viewLessons],
   [/^\/new$/, viewNewLesson],
   [/^\/record$/, viewRecord],
+  [/^\/progress$/, viewProgress],
   [/^\/lessons\/([a-f0-9]+)$/, viewLesson],
   [/^\/users$/, viewUsers, { admin: true }],
   [/^\/account$/, viewAccount],
@@ -274,6 +282,7 @@ function renderShell(active, content) {
           ${nav('/', 'lessons', 'list', 'Уроки')}
           ${nav('/new', 'new', 'plus', 'Новый анализ')}
           ${nav('/record', 'record', 'mic', 'Записать урок')}
+          ${nav('/progress', 'progress', 'chart', 'Динамика')}
           <a href="#/record" class="rec-indicator" id="recIndicator" hidden><span class="rec-dot recording"></span>Идёт запись <span class="mono" id="recIndicatorTime">00:00</span></a>
           ${u.role === 'admin' ? `<div class="nav-section">Администрирование</div>${nav('/users', 'users', 'users', 'Пользователи')}` : ''}
         </nav>
@@ -282,7 +291,7 @@ function renderShell(active, content) {
             <div class="avatar">${esc(initials(u.name, u.email))}</div>
             <div style="min-width:0">
               <div class="name">${esc(u.name || u.email)}</div>
-              <div class="role">${u.role === 'admin' ? 'Администратор' : 'Учитель'}</div>
+              <div class="role">${ROLE_LABEL[u.role] || ''}</div>
             </div>
           </div>
           <div class="foot-links">
@@ -397,7 +406,7 @@ async function viewLogin() {
 /* ------------------------------------------------------------------ */
 
 async function viewLessons() {
-  const isAdmin = state.user.role === 'admin';
+  const isAdmin = canViewAll(state.user);
   const scope = isAdmin ? state.lessonsScope : 'mine';
   renderShell('lessons', `
     <div class="page">
@@ -464,7 +473,7 @@ async function viewLessons() {
       const s = l.summary;
       return `<tr class="clickable" data-id="${l.id}" tabindex="0">
         <td class="nowrap">${esc(date(l))}</td>
-        <td><div class="cell-title">${esc(title(l))}</div>${sub(l) ? `<div class="cell-sub">${esc(sub(l))}</div>` : ''}</td>
+        <td><div class="cell-title">${esc(title(l))}${l.comment_count ? ` <span class="tag" title="Комментарии" style="vertical-align:1px">${l.comment_count} ${plural(l.comment_count, 'коммент.', 'коммент.', 'коммент.')}</span>` : ''}</div>${sub(l) ? `<div class="cell-sub">${esc(sub(l))}</div>` : ''}</td>
         <td>${esc(l.teacher_name || l.owner_name || '')}${scope === 'all' && l.owner_name && l.owner_name !== l.teacher_name ? `<div class="cell-sub">загрузил(а): ${esc(l.owner_name)}</div>` : ''}</td>
         <td class="num">${s ? fmtDuration(s.duration_seconds) : '—'}</td>
         <td class="num">${s && s.teacher_pct != null ? Math.round(s.teacher_pct) + '%' : '—'}</td>
@@ -507,7 +516,7 @@ async function loadOptions() {
 }
 
 const DRAFT_KEY = 'lessonDraft';
-const DRAFT_FIELDS = ['lesson_title', 'subject', 'grade', 'subject_key', 'key_concept', 'global_context',
+const DRAFT_FIELDS = ['lesson_title', 'subject', 'grade', 'subject_key', 'lesson_language', 'report_language', 'key_concept', 'global_context',
   'statement_of_inquiry', 'inquiry_questions', 'learning_objectives', 'atl_skills_detail', 'learning_experiences'];
 
 function dropzone({ name, title, sub, accept, iconName, required }) {
@@ -560,6 +569,10 @@ async function viewNewLesson() {
             <div class="field"><label for="grade">Класс <span class="opt">/ MYP year</span></label><input class="input" id="grade" name="grade" placeholder="MYP 3, 8A…"></div>
             <div class="field"><label for="lesson_date">Дата урока</label><input class="input" id="lesson_date" name="lesson_date" type="date" value="${todayIso()}"></div>
             <div class="field span-2"><label for="teacher_name">Учитель</label><input class="input" id="teacher_name" name="teacher_name" value="${esc(state.user.name)}"></div>
+            <div class="field"><label for="lesson_language">Язык урока</label><select class="select" id="lesson_language" name="lesson_language">${Object.entries(LESSON_LANGUAGES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+              <span class="help">Помогает точнее распознать речь.</span></div>
+            <div class="field"><label for="report_language">Язык выводов и рекомендаций</label><select class="select" id="report_language" name="report_language">${Object.entries(REPORT_LANGUAGES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+              <span class="help">Цитаты из урока остаются на языке оригинала.</span></div>
             <div class="span-2" id="observabilityWarn"></div>
           </div>
         </section>
@@ -810,7 +823,7 @@ async function viewLesson(id) {
         <div class="head-actions">
           ${done ? `<a class="btn" href="/api/lessons/${id}/report.docx">${icon('download')}Word</a>
                     <button class="btn" id="printBtn">${icon('print')}Печать / PDF</button>` : ''}
-          ${lesson.status === 'done' || lesson.status === 'error' ? `<button class="btn ghost icon-btn" id="deleteBtn" aria-label="Удалить урок" data-tip="Удалить урок">${icon('trash')}</button>` : ''}
+          ${lesson.can_delete && (lesson.status === 'done' || lesson.status === 'error') ? `<button class="btn ghost icon-btn" id="deleteBtn" aria-label="Удалить урок" data-tip="Удалить урок">${icon('trash')}</button>` : ''}
         </div>
       </div>
       <div id="lessonBody"></div>
@@ -847,7 +860,7 @@ function renderProcessing(lesson) {
               return `<li class="${cls}"><span class="mark">${cls === 'done' ? icon('check') : cls === 'failed' ? icon('x') : ''}</span>${esc(n)}</li>`;
             }).join('')}
           </ol>
-          ${isErr ? `<div style="margin-top:14px;display:flex;gap:8px"><button class="btn primary" id="retryBtn">${icon('refresh')}Повторить анализ</button></div>
+          ${isErr && lesson.can_retry ? `<div style="margin-top:14px;display:flex;gap:8px"><button class="btn primary" id="retryBtn">${icon('refresh')}Повторить анализ</button></div>
                      <p class="subtle" style="font-size:12.5px;margin-top:8px">Повторный запуск продолжит с последнего завершённого этапа — расшифровка не будет оплачена повторно.</p>` : ''}
         </div>
       </div>
@@ -900,6 +913,7 @@ function renderReport(lesson) {
     ['questions', 'Вопросы', questions.length],
     ['inquiry', 'Inquiry', episodes.length],
     ['transcript', 'Расшифровка', utts.length],
+    ['discussion', 'Обсуждение', 0],
     ['method', 'Методология'],
   ];
 
@@ -927,10 +941,12 @@ function renderReport(lesson) {
     <div class="tab-panel" id="panel-questions" role="tabpanel" hidden data-print-title="Вопросы учителя">${questionsPanel(questions)}</div>
     <div class="tab-panel" id="panel-inquiry" role="tabpanel" hidden data-print-title="Уровни inquiry">${inquiryPanel(episodes, duration)}</div>
     <div class="tab-panel transcript-panel" id="panel-transcript" role="tabpanel" hidden>${transcriptPanel(utts, r.single_track_mode)}</div>
+    <div class="tab-panel" id="panel-discussion" role="tabpanel" hidden data-print-title="Обсуждение">${discussionPanel()}</div>
     <div class="tab-panel" id="panel-method" role="tabpanel" hidden data-print-title="Методология"><div class="panel panel-pad prose"><p>${esc(r.methodology_notes || '')}</p></div></div>
   `;
 
   const showTab = key => {
+    if (!$('#tab-' + key)) return;
     $$('.tabs [role=tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === key)));
     $$('.tab-panel').forEach(p => { p.hidden = p.id !== 'panel-' + key; });
   };
@@ -962,6 +978,8 @@ function renderReport(lesson) {
 
   bindQuestionFilter();
   bindTranscript(utts);
+  bindDiscussion(lesson.id, n => { const c = $('#tab-discussion .count'); if (c) c.textContent = n; }, key => showTab(key));
+  if (state.query?.get('tab')) showTab(state.query.get('tab'));
 }
 
 function summaryPanel(r, tt, duration) {
@@ -1232,7 +1250,7 @@ async function viewUsers() {
   renderShell('users', `
     <div class="page">
       <div class="page-head">
-        <div><h1>Пользователи</h1><p class="lede">Учётные записи учителей и администраторов. Самостоятельной регистрации нет — доступ выдаётся здесь.</p></div>
+        <div><h1>Пользователи</h1><p class="lede">Учётные записи учителей, методистов и администраторов. Самостоятельной регистрации нет — доступ выдаётся здесь.</p></div>
         <div class="head-actions"><button class="btn primary" id="addUser">${icon('plus')}Добавить пользователя</button></div>
       </div>
       <div id="usersBody"></div>
@@ -1244,13 +1262,12 @@ async function viewUsers() {
       <thead><tr><th>Пользователь</th><th>Роль</th><th class="num">Уроков</th><th>Статус</th><th></th></tr></thead>
       <tbody>${users.map(u => `<tr>
         <td><div class="cell-title">${esc(u.name || '—')}</div><div class="cell-sub">${esc(u.email)}</div></td>
-        <td>${u.role === 'admin' ? 'Администратор' : 'Учитель'}</td>
+        <td>${u.id === state.user.id ? ROLE_LABEL[u.role] : `<select class="select" data-role-select="${u.id}" aria-label="Роль" style="width:auto;height:30px">${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}" ${k === u.role ? 'selected' : ''}>${v}</option>`).join('')}</select>`}</td>
         <td class="num">${u.lesson_count}</td>
         <td>${u.is_active ? '<span class="badge good">Активен</span>' : '<span class="badge">Отключён</span>'}</td>
         <td class="num nowrap">
           <button class="btn sm ghost" data-act="pw" data-id="${u.id}">Сменить пароль</button>
-          ${u.id !== state.user.id ? `<button class="btn sm ghost" data-act="role" data-id="${u.id}" data-role="${u.role}">${u.role === 'admin' ? 'Сделать учителем' : 'Сделать админом'}</button>
-          <button class="btn sm ghost" data-act="toggle" data-id="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Отключить' : 'Включить'}</button>` : ''}
+          ${u.id !== state.user.id ? `<button class="btn sm ghost" data-act="toggle" data-id="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Отключить' : 'Включить'}</button>` : ''}
         </td>
       </tr>`).join('')}</tbody></table></div></div>`;
   }
@@ -1264,8 +1281,6 @@ async function viewUsers() {
         const active = b.dataset.active === '1';
         if (active && !await confirmDialog({ title: 'Отключить пользователя?', text: 'Он не сможет войти. Его уроки сохранятся.', confirm: 'Отключить', danger: true })) return;
         await api('PATCH', `/api/users/${id}`, { is_active: !active });
-      } else if (b.dataset.act === 'role') {
-        await api('PATCH', `/api/users/${id}`, { role: b.dataset.role === 'admin' ? 'teacher' : 'admin' });
       } else if (b.dataset.act === 'pw') {
         const pw = await passwordDialog();
         if (!pw) return;
@@ -1276,6 +1291,13 @@ async function viewUsers() {
     } catch (err) { toast(err.message, 'bad'); }
   });
 
+  $('#usersBody').addEventListener('change', async e => {
+    const sel = e.target.closest('[data-role-select]'); if (!sel) return;
+    try { await api('PATCH', `/api/users/${sel.dataset.roleSelect}`, { role: sel.value }); toast('Роль изменена.'); }
+    catch (err) { toast(err.message, 'bad'); }
+    await load();
+  });
+
   $('#addUser').addEventListener('click', () => {
     const d = document.createElement('dialog');
     const pw = genPassword();
@@ -1284,7 +1306,8 @@ async function viewUsers() {
         <h2>Новый пользователь</h2>
         <div class="field"><label for="uName">Имя и фамилия</label><input class="input" id="uName" required></div>
         <div class="field"><label for="uEmail">Email</label><input class="input" id="uEmail" type="email" required></div>
-        <div class="field"><label for="uRole">Роль</label><select class="select" id="uRole"><option value="teacher">Учитель</option><option value="admin">Администратор</option></select></div>
+        <div class="field"><label for="uRole">Роль</label><select class="select" id="uRole">${Object.entries(ROLE_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+          <span class="help">Методист видит уроки и динамику всех учителей и может комментировать отчёты.</span></div>
         <div class="field"><label for="uPw">Временный пароль</label><input class="input mono" id="uPw" value="${pw}" required minlength="8">
           <span class="help">Передайте его пользователю — он сможет сменить пароль в профиле.</span></div>
         <div class="form-error" id="uErr"></div>
@@ -1978,6 +2001,206 @@ function applyPlannerFields(form, o, f, refreshSubject) {
     checkGroup('criteria', subj.assessment_criteria.filter(c => f.assessment_criteria.includes(c.code)).map(c => `Criterion ${c.code}: ${c.label}`));
   }
   return n;
+}
+
+/* ------------------------------------------------------------------ */
+/* Динамика по учителю                                                 */
+/* ------------------------------------------------------------------ */
+
+const PROGRESS_METRICS = [
+  { key: 'teacher_pct', label: 'Речь учителя', hint: 'доля времени урока; чем ниже, тем больше места ученикам', better: 'down' },
+  { key: 'student_speech_pct', label: 'Речь учеников', hint: 'доля времени, когда говорят ученики', better: 'up' },
+  { key: 'higher_order_pct', label: 'Вопросы на применение и анализ', hint: 'доля среди всех вопросов учителя', better: 'up' },
+  { key: 'inquiry_high_pct', label: 'Inquiry уровня 2 и выше', hint: 'доля времени, когда исследуют ученики', better: 'up' },
+  { key: 'plan_strong_pct', label: 'Реализация плана', hint: 'пункты плана: «реализовано» = 1, «частично» = 0,5', better: 'up' },
+  { key: 'criteria_strong_pct', label: 'Strands, где работали ученики', hint: 'среди наблюдаемых по аудио', better: 'up' },
+];
+
+function lessonShortDate(l) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(l.lesson_date || '');
+  if (m) return `${+m[3]} ${MONTHS[+m[2] - 1]}`;
+  const d = new Date(l.created_at * 1000);
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+}
+
+function lineChart(points, metric) {
+  // points: [{ y, label, id, title }] — уже без null
+  const W = 320, H = 132, padL = 26, padR = 8, padT = 8, padB = 22;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const n = points.length;
+  const x = i => padL + (n === 1 ? iw / 2 : (iw * i) / (n - 1));
+  const y = v => padT + ih - (ih * Math.max(0, Math.min(100, v))) / 100;
+  const grid = [0, 50, 100].map(v => `<line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${padL - 6}" y="${y(v) + 4}" class="ytick">${v}</text>`).join('');
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`).join(' ');
+  // Подписи по оси X: первая, последняя и не больше двух между ними — чтобы не наезжали.
+  const tickIdx = new Set(n <= 4 ? points.map((_, i) => i) : [0, Math.round((n - 1) / 3), Math.round((2 * (n - 1)) / 3), n - 1]);
+  const xt = points.map((p, i) => tickIdx.has(i) ? `<text x="${x(i)}" y="${H - 6}" class="xtick" text-anchor="${n === 1 ? 'middle' : i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}">${esc(p.label)}</text>` : '').join('');
+  const dots = points.map((p, i) => `
+    <a href="#/lessons/${p.id}" class="pt" data-tip="<b>${esc(p.title)}</b><br>${esc(p.label)} · ${esc(metric.label)}: ${Math.round(p.y)}%">
+      <circle cx="${x(i)}" cy="${y(p.y)}" r="12" class="hit"/>
+      <circle cx="${x(i)}" cy="${y(p.y)}" r="4.5" class="dot"/>
+    </a>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="linechart" role="img" aria-label="${esc(metric.label)} по урокам">
+    ${grid}${n > 1 ? `<path d="${path}" class="line"/>` : ''}${dots}${xt}</svg>`;
+}
+
+function metricCard(metric, lessons) {
+  const pts = lessons
+    .map(l => ({ y: l.metrics[metric.key], label: lessonShortDate(l), id: l.id, title: l.lesson_title || l.subject || 'Урок' }))
+    .filter(p => p.y != null);
+  if (!pts.length) {
+    return `<div class="panel metric-card"><div class="mc-head"><div><div class="k-label">${esc(metric.label)}</div><div class="k-note">${esc(metric.hint)}</div></div></div>
+      <p class="subtle" style="padding:24px 0;font-size:13px">Нет данных по этому показателю.</p></div>`;
+  }
+  const last = pts[pts.length - 1].y;
+  let delta = '';
+  if (pts.length > 1) {
+    const prev = pts.slice(0, -1);
+    const avg = prev.reduce((a, p) => a + p.y, 0) / prev.length;
+    const d = Math.round(last - avg);
+    if (d === 0) delta = `<span class="delta">на уровне среднего за прошлые уроки</span>`;
+    else {
+      const good = (d > 0) === (metric.better === 'up');
+      delta = `<span class="delta ${good ? 'good' : 'bad'}">${d > 0 ? '▲' : '▼'} ${Math.abs(d)} п.п. к среднему за прошлые уроки${good ? '' : ''}</span>`;
+    }
+  }
+  return `<div class="panel metric-card">
+    <div class="mc-head">
+      <div><div class="k-label">${esc(metric.label)}</div><div class="k-note">${esc(metric.hint)}</div></div>
+      <div class="mc-value">${Math.round(last)}<small>%</small></div>
+    </div>
+    ${delta}
+    ${lineChart(pts, metric)}
+  </div>`;
+}
+
+async function viewProgress() {
+  const canAll = canViewAll(state.user);
+  let userId = canAll ? (state.query?.get('user') || state.progressUser || '') : '';
+  let subjectFilter = '';
+  renderShell('progress', `<div class="page" id="progPage"><div class="panel panel-pad stack"><div class="skeleton" style="width:40%"></div><div class="skeleton"></div></div></div>`);
+
+  async function load() {
+    const data = await api('GET', '/api/progress' + (userId ? `?user_id=${encodeURIComponent(userId)}` : ''));
+    const t = data.teacher;
+    if (!userId && !data.lessons.length && data.teachers?.some(x => x.done_count)) {
+      userId = String(data.teachers.find(x => x.done_count).id);
+      return load();
+    }
+    const subjects = [...new Set(data.lessons.map(l => l.subject).filter(Boolean))].sort();
+    const lessons = data.lessons.filter(l => !subjectFilter || l.subject === subjectFilter);
+    const teacherSel = data.teachers ? `<select class="select" id="pTeacher" aria-label="Учитель">
+        ${data.teachers.map(x => `<option value="${x.id}" ${x.id === t.id ? 'selected' : ''}>${esc(x.name || x.email)} · ${x.done_count} ${plural(x.done_count, 'урок', 'урока', 'уроков')}</option>`).join('')}
+      </select>` : '';
+    const subjSel = subjects.length > 1 ? `<select class="select" id="pSubject" aria-label="Предмет"><option value="">Все предметы</option>${subjects.map(s => `<option ${s === subjectFilter ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>` : '';
+
+    let body;
+    if (!lessons.length) {
+      body = `<div class="panel empty"><h2>Пока нет готовых уроков</h2><p>Динамика появится, когда будет проанализирован хотя бы один урок.</p>${t.id === state.user.id ? `<a class="btn primary" href="#/new">${icon('plus')}Проанализировать урок</a>` : ''}</div>`;
+    } else {
+      body = `
+        ${lessons.length < 3 ? `<div class="callout" style="margin-bottom:16px">${icon('info')}<div>Готовых уроков: ${lessons.length}. Тенденция станет заметна после 3–4 уроков.</div></div>` : ''}
+        <div class="metric-grid">${PROGRESS_METRICS.map(m => metricCard(m, lessons)).join('')}</div>
+        <div class="panel" style="margin-top:16px">
+          <div class="panel-head"><h2>Все уроки</h2><span class="hint">точки на графиках кликабельны</span></div>
+          <div class="table-wrap" style="margin-top:10px"><table class="data">
+            <thead><tr><th>Дата</th><th>Урок</th><th class="num">Учитель</th><th class="num">Ученики</th><th class="num">Вопросы</th><th class="num">Выс. порядка</th><th class="num">Inquiry 2+</th><th class="num">План</th></tr></thead>
+            <tbody>${lessons.slice().reverse().map(l => {
+              const m = l.metrics, f = v => v == null ? '—' : Math.round(v) + '%';
+              return `<tr class="clickable" data-id="${l.id}" tabindex="0">
+                <td class="nowrap">${esc(fmtDate(l.lesson_date) || fmtTimestamp(l.created_at))}</td>
+                <td><div class="cell-title">${esc(l.lesson_title || l.subject || 'Урок')}</div><div class="cell-sub">${esc([l.lesson_title ? l.subject : '', l.grade].filter(Boolean).join(' · '))}</div></td>
+                <td class="num">${f(m.teacher_pct)}</td><td class="num">${f(m.student_speech_pct)}</td>
+                <td class="num">${m.question_count ?? '—'}</td><td class="num">${f(m.higher_order_pct)}</td>
+                <td class="num">${f(m.inquiry_high_pct)}</td><td class="num">${f(m.plan_strong_pct)}</td>
+              </tr>`;
+            }).join('')}</tbody></table></div>
+        </div>`;
+    }
+
+    $('#progPage').innerHTML = `
+      <div class="page-head">
+        <div><h1>Динамика</h1><p class="lede">${t.id === state.user.id ? 'Как меняются ваши уроки' : `Уроки: ${esc(t.name || t.email)}`} — по ключевым показателям анализа.</p></div>
+      </div>
+      ${teacherSel || subjSel ? `<div class="toolbar">${teacherSel}${subjSel}</div>` : ''}
+      ${body}`;
+
+    $('#pTeacher')?.addEventListener('change', e => { userId = e.target.value; state.progressUser = userId; subjectFilter = ''; load(); });
+    $('#pSubject')?.addEventListener('change', e => { subjectFilter = e.target.value; load(); });
+    $$('#progPage tr[data-id]').forEach(tr => {
+      tr.addEventListener('click', () => go('/lessons/' + tr.dataset.id));
+      tr.addEventListener('keydown', e => { if (e.key === 'Enter') go('/lessons/' + tr.dataset.id); });
+    });
+  }
+  await load();
+}
+
+/* ------------------------------------------------------------------ */
+/* Обсуждение урока                                                    */
+/* ------------------------------------------------------------------ */
+
+const COMMENT_SECTIONS = {
+  general: 'Урок в целом', summary: 'Сводка', plan: 'План и факт', criteria: 'Критерии',
+  questions: 'Вопросы', inquiry: 'Inquiry', transcript: 'Расшифровка',
+};
+
+function discussionPanel() {
+  return `<div class="stack">
+    <div class="panel"><div class="panel-body" id="commentsList"><div class="skeleton" style="width:60%"></div></div></div>
+    <form class="panel panel-pad stack no-print" id="commentForm">
+      <div class="field"><label for="cBody">Комментарий</label>
+        <textarea class="textarea" id="cBody" rows="3" maxlength="5000" placeholder="${state.user.role === 'teacher' ? 'Ваша рефлексия или ответ методисту' : 'Наблюдение, вопрос учителю или рекомендация'}"></textarea></div>
+      <div class="comment-form-row">
+        <select class="select" id="cSection" aria-label="Раздел отчёта" style="width:auto">${Object.entries(COMMENT_SECTIONS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+        <span class="subtle hide-sm" style="font-size:12.5px;margin-left:auto">Ctrl+Enter — отправить</span>
+        <button class="btn primary" type="submit">Отправить</button>
+      </div>
+    </form>
+  </div>`;
+}
+
+async function bindDiscussion(lessonId, onCount, showTab) {
+  const list = $('#commentsList');
+  if (!list) return;
+  async function load() {
+    const { comments } = await api('GET', `/api/lessons/${lessonId}/comments`);
+    onCount(comments.length);
+    list.innerHTML = comments.length ? `<ul class="comments">${comments.map(c => `
+      <li>
+        <div class="avatar">${esc(initials(c.author_name, c.author_email))}</div>
+        <div style="min-width:0;flex:1">
+          <div class="c-meta"><b>${esc(c.author_name || c.author_email)}</b><span class="subtle">${ROLE_LABEL[c.author_role] || ''} · ${esc(fmtTimestamp(c.created_at))}</span>
+            ${c.section !== 'general' ? `<button type="button" class="tag tag-link" data-goto="${esc(c.section)}">${esc(COMMENT_SECTIONS[c.section] || c.section)}</button>` : ''}
+            ${(c.user_id === state.user.id || state.user.role === 'admin') ? `<button type="button" class="btn ghost sm c-del no-print" data-del="${c.id}" aria-label="Удалить комментарий">${icon('trash')}</button>` : ''}
+          </div>
+          <div class="c-body">${esc(c.body)}</div>
+        </div>
+      </li>`).join('')}</ul>`
+      : `<p class="subtle" style="padding:6px 0">Комментариев пока нет. ${state.user.role === 'teacher' ? 'Здесь можно записать свою рефлексию по уроку или ответить методисту.' : 'Оставьте наблюдение или вопрос учителю — он увидит его в отчёте.'}</p>`;
+  }
+  list.addEventListener('click', async e => {
+    const g = e.target.closest('[data-goto]');
+    if (g) return showTab(g.dataset.goto);
+    const d = e.target.closest('[data-del]');
+    if (!d) return;
+    if (!await confirmDialog({ title: 'Удалить комментарий?', text: 'Комментарий будет удалён для всех.', confirm: 'Удалить', danger: true })) return;
+    try { await api('DELETE', `/api/comments/${d.dataset.del}`); await load(); } catch (err) { toast(err.message, 'bad'); }
+  });
+  const form = $('#commentForm');
+  const submit = async () => {
+    const body = $('#cBody').value.trim();
+    if (!body) return;
+    const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+    try {
+      await api('POST', `/api/lessons/${lessonId}/comments`, { body, section: $('#cSection').value });
+      $('#cBody').value = '';
+      await load();
+    } catch (err) { toast(err.message, 'bad'); }
+    btn.disabled = false;
+  };
+  form.addEventListener('submit', e => { e.preventDefault(); submit(); });
+  $('#cBody').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } });
+  try { await load(); } catch { list.innerHTML = '<p class="subtle">Не удалось загрузить комментарии.</p>'; }
 }
 
 /* ------------------------------------------------------------------ */

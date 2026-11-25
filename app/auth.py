@@ -23,6 +23,11 @@ from fastapi import HTTPException, Request, Response
 
 import db
 
+# teacher  — видит и анализирует только свои уроки;
+# observer — методист/координатор: видит все уроки и динамику, комментирует;
+# admin    — всё, что observer, плюс управление пользователями.
+ROLES = ("teacher", "observer", "admin")
+
 SESSION_COOKIE = "myp_session"
 SESSION_TTL = 30 * 24 * 3600  # 30 дней
 
@@ -97,6 +102,10 @@ def require_admin(request: Request) -> dict:
     if user["role"] != "admin":
         raise HTTPException(403, "Доступно только администратору.")
     return user
+
+
+def can_view_all(user: dict) -> bool:
+    return user["role"] in ("admin", "observer")
 
 
 def public_user(user: dict) -> dict:

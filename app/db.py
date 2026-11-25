@@ -67,6 +67,17 @@ CREATE TABLE IF NOT EXISTS lessons (
 
 CREATE INDEX IF NOT EXISTS idx_lessons_user ON lessons(user_id, created_at DESC);
 
+-- Комментарии к отчёту: методист/координатор и учитель обсуждают урок.
+CREATE TABLE IF NOT EXISTS lesson_comments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    lesson_id   TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    section     TEXT NOT NULL DEFAULT 'general',
+    body        TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_lesson ON lesson_comments(lesson_id, created_at);
+
 -- Записи, сделанные прямо на сайте (app/recordings.py). Куски аудио лежат
 -- в DATA_DIR/recordings/<id>/, после завершения склеиваются в один mp3.
 CREATE TABLE IF NOT EXISTS recordings (
@@ -92,6 +103,25 @@ def init(db_path: Path) -> None:
     with connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+# Новые колонки в существующих таблицах. SQLite не умеет ADD COLUMN IF NOT
+# EXISTS, поэтому проверяем по PRAGMA table_info.
+_MIGRATIONS = {
+    "lessons": {
+        "lesson_language": "TEXT NOT NULL DEFAULT ''",
+        "report_language": "TEXT NOT NULL DEFAULT 'ru'",
+    },
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, cols in _MIGRATIONS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for col, ddl in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
 
 @contextmanager
@@ -223,8 +253,9 @@ def create_lesson(lesson_id: str, user_id: int, meta: dict, planned: dict, uploa
         c.execute(
             """
             INSERT INTO lessons (id, user_id, teacher_name, subject, subject_key, lesson_date,
-                                 lesson_title, grade, planned, upload_paths, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 lesson_title, grade, lesson_language, report_language,
+                                 planned, upload_paths, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 lesson_id,
@@ -235,6 +266,8 @@ def create_lesson(lesson_id: str, user_id: int, meta: dict, planned: dict, uploa
                 meta.get("lesson_date", ""),
                 meta.get("lesson_title", ""),
                 meta.get("grade", ""),
+                meta.get("lesson_language", ""),
+                meta.get("report_language", "ru") or "ru",
                 json.dumps(planned, ensure_ascii=False),
                 json.dumps(upload_paths, ensure_ascii=False),
                 now,
@@ -252,7 +285,8 @@ def list_lessons(user_id: int | None) -> list[dict]:
     """user_id=None - все уроки (для администратора)."""
     cols = """l.id, l.user_id, l.status, l.step, l.step_total, l.teacher_name, l.subject,
               l.subject_key, l.lesson_date, l.lesson_title, l.grade, l.created_at,
-              l.finished_at, l.results, u.name AS owner_name, u.email AS owner_email"""
+              l.finished_at, l.results, u.name AS owner_name, u.email AS owner_email,
+              (SELECT COUNT(*) FROM lesson_comments c WHERE c.lesson_id = l.id) AS comment_count"""
     with connect() as c:
         if user_id is None:
             rows = c.execute(
@@ -358,3 +392,73 @@ def add_recording_bytes(rec_id: str, n: int) -> None:
 def delete_recording(rec_id: str) -> None:
     with connect() as c:
         c.execute("DELETE FROM recordings WHERE id = ?", (rec_id,))
+
+
+# ---------------------------------------------------------------------------
+# comments
+# ---------------------------------------------------------------------------
+
+def list_comments(lesson_id: str) -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            """
+            SELECT c.id, c.lesson_id, c.user_id, c.section, c.body, c.created_at,
+                   u.name AS author_name, u.email AS author_email, u.role AS author_role
+            FROM lesson_comments c JOIN users u ON u.id = c.user_id
+            WHERE c.lesson_id = ? ORDER BY c.created_at
+            """,
+            (lesson_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_comment(lesson_id: str, user_id: int, section: str, body: str) -> int:
+    with connect() as c:
+        cur = c.execute(
+            "INSERT INTO lesson_comments (lesson_id, user_id, section, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (lesson_id, user_id, section, body, time.time()),
+        )
+        return int(cur.lastrowid)
+
+
+def get_comment(comment_id: int) -> dict | None:
+    with connect() as c:
+        return _row(c.execute("SELECT * FROM lesson_comments WHERE id = ?", (comment_id,)).fetchone())
+
+
+def delete_comment(comment_id: int) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM lesson_comments WHERE id = ?", (comment_id,))
+
+
+# ---------------------------------------------------------------------------
+# progress
+# ---------------------------------------------------------------------------
+
+def done_lessons_with_results(user_id: int) -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            """
+            SELECT id, lesson_title, subject, subject_key, grade, lesson_date, created_at, results
+            FROM lessons WHERE user_id = ? AND status = 'done' ORDER BY created_at
+            """,
+            (user_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["results"] = json.loads(d["results"]) if d["results"] else {}
+        out.append(d)
+    return out
+
+
+def teachers_with_lessons() -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            """
+            SELECT u.id, u.name, u.email, u.role,
+                   (SELECT COUNT(*) FROM lessons l WHERE l.user_id = u.id AND l.status = 'done') AS done_count
+            FROM users u WHERE u.is_active = 1 ORDER BY u.name, u.email
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]

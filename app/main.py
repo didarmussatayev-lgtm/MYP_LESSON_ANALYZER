@@ -138,6 +138,8 @@ def _run_lesson(lesson_id: str, resume: bool = False) -> None:
             template_path=str(TEMPLATE_PATH),
             subject_frameworks_path=str(SUBJECT_FRAMEWORKS_PATH),
             subject_key=lesson["subject_key"] or None,
+            lesson_language=LESSON_LANGUAGES.get(lesson.get("lesson_language") or ""),
+            report_language=REPORT_LANGUAGES.get(lesson.get("report_language") or "ru", "русском"),
             on_progress=on_progress,
             on_step=on_step,
         )
@@ -298,7 +300,7 @@ async def users_create(body: NewUserBody, admin: dict = Depends(auth.require_adm
     email = body.email.strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise HTTPException(400, "Некорректный email.")
-    if body.role not in ("teacher", "admin"):
+    if body.role not in auth.ROLES:
         raise HTTPException(400, "Неизвестная роль.")
     if db.get_user_by_email(email):
         raise HTTPException(409, "Пользователь с таким email уже существует.")
@@ -325,7 +327,7 @@ async def users_update(user_id: int, body: UserPatchBody, admin: dict = Depends(
     if body.name is not None:
         fields["name"] = body.name.strip()
     if body.role is not None:
-        if body.role not in ("teacher", "admin"):
+        if body.role not in auth.ROLES:
             raise HTTPException(400, "Неизвестная роль.")
         fields["role"] = body.role
     if body.is_active is not None:
@@ -343,10 +345,19 @@ async def users_update(user_id: int, body: UserPatchBody, admin: dict = Depends(
 # Уроки
 # ---------------------------------------------------------------------------
 
-def _get_owned_lesson(lesson_id: str, user: dict) -> dict:
+def _get_owned_lesson(lesson_id: str, user: dict, write: bool = False) -> dict:
+    """
+    Просмотр — владелец, методист, администратор.
+    Изменение (повтор, удаление) — только владелец и администратор.
+    """
     lesson = db.get_lesson(lesson_id)
-    if lesson is None or (lesson["user_id"] != user["id"] and user["role"] != "admin"):
+    if lesson is None:
         raise HTTPException(404, "Урок не найден.")
+    is_owner = lesson["user_id"] == user["id"]
+    if not (is_owner or auth.can_view_all(user)):
+        raise HTTPException(404, "Урок не найден.")
+    if write and not (is_owner or user["role"] == "admin"):
+        raise HTTPException(403, "Изменять урок может только его автор или администратор.")
     return lesson
 
 
@@ -373,6 +384,9 @@ def _save_upload(upload: UploadFile, dest_dir: Path, prefix: str, allowed_ext: s
     return dest
 
 
+LESSON_LANGUAGES = {"ru": "русский", "kk": "казахский", "en": "английский", "mixed": "смешанный (несколько языков)"}
+REPORT_LANGUAGES = {"ru": "русском", "kk": "казахском", "en": "английском"}
+
 PLANNED_FIELDS = [
     "key_concept", "related_concept", "global_context", "statement_of_inquiry",
     "inquiry_questions", "learning_objectives", "atl_skills", "learner_profile",
@@ -392,6 +406,8 @@ async def create_lesson(
     lesson_date: str = Form(""),
     lesson_title: str = Form(""),
     grade: str = Form(""),
+    lesson_language: str = Form(""),
+    report_language: str = Form("ru"),
     key_concept: str = Form(""),
     related_concept: str = Form(""),
     global_context: str = Form(""),
@@ -435,6 +451,8 @@ async def create_lesson(
         "lesson_date": lesson_date.strip(),
         "lesson_title": lesson_title.strip(),
         "grade": grade.strip(),
+        "lesson_language": lesson_language if lesson_language in LESSON_LANGUAGES else "",
+        "report_language": report_language if report_language in REPORT_LANGUAGES else "ru",
     }
     planned_values = {
         "key_concept": key_concept,
@@ -464,7 +482,7 @@ async def create_lesson(
 
 @app.get("/api/lessons")
 async def lessons_list(scope: str = "mine", user: dict = Depends(auth.current_user)) -> dict:
-    all_lessons = scope == "all" and user["role"] == "admin"
+    all_lessons = scope == "all" and auth.can_view_all(user)
     return {"lessons": db.list_lessons(None if all_lessons else user["id"])}
 
 
@@ -477,13 +495,15 @@ async def lesson_detail(lesson_id: str, user: dict = Depends(auth.current_user))
         lesson.pop("error_detail", None)
     owner = db.get_user(lesson["user_id"])
     lesson["owner_name"] = owner["name"] if owner else ""
-    lesson["can_retry"] = lesson["status"] == "error"
+    can_write = lesson["user_id"] == user["id"] or user["role"] == "admin"
+    lesson["can_retry"] = lesson["status"] == "error" and can_write
+    lesson["can_delete"] = can_write
     return {"lesson": lesson}
 
 
 @app.post("/api/lessons/{lesson_id}/retry")
 async def lesson_retry(lesson_id: str, user: dict = Depends(auth.current_user)) -> dict:
-    lesson = _get_owned_lesson(lesson_id, user)
+    lesson = _get_owned_lesson(lesson_id, user, write=True)
     if lesson["status"] != "error":
         raise HTTPException(409, "Повторный запуск возможен только после ошибки.")
     db.update_lesson(lesson_id, status="queued", error_public=None, error_detail=None)
@@ -494,7 +514,7 @@ async def lesson_retry(lesson_id: str, user: dict = Depends(auth.current_user)) 
 
 @app.delete("/api/lessons/{lesson_id}")
 async def lesson_delete(lesson_id: str, user: dict = Depends(auth.current_user)) -> Response:
-    lesson = _get_owned_lesson(lesson_id, user)
+    lesson = _get_owned_lesson(lesson_id, user, write=True)
     if lesson["status"] in ("queued", "running"):
         raise HTTPException(409, "Урок ещё обрабатывается. Удалить можно после завершения.")
     _delete_sources(lesson_id)
@@ -519,6 +539,132 @@ async def lesson_download(lesson_id: str, user: dict = Depends(auth.current_user
 
 
 app.include_router(recordings.router)
+
+
+# ---------------------------------------------------------------------------
+# Комментарии к отчёту
+# ---------------------------------------------------------------------------
+
+COMMENT_SECTIONS = {"general", "summary", "plan", "criteria", "questions", "inquiry", "transcript"}
+
+
+class CommentBody(BaseModel):
+    body: str
+    section: str = "general"
+
+
+@app.get("/api/lessons/{lesson_id}/comments")
+async def comments_list(lesson_id: str, user: dict = Depends(auth.current_user)) -> dict:
+    _get_owned_lesson(lesson_id, user)
+    return {"comments": db.list_comments(lesson_id)}
+
+
+@app.post("/api/lessons/{lesson_id}/comments")
+async def comments_add(lesson_id: str, body: CommentBody, user: dict = Depends(auth.current_user)) -> dict:
+    _get_owned_lesson(lesson_id, user)
+    text = body.body.strip()
+    if not text:
+        raise HTTPException(400, "Комментарий пустой.")
+    if len(text) > 5000:
+        raise HTTPException(400, "Комментарий длиннее 5000 символов.")
+    section = body.section if body.section in COMMENT_SECTIONS else "general"
+    cid = db.add_comment(lesson_id, user["id"], section, text)
+    return {"id": cid}
+
+
+@app.delete("/api/comments/{comment_id}")
+async def comments_delete(comment_id: int, user: dict = Depends(auth.current_user)) -> dict:
+    c = db.get_comment(comment_id)
+    if c is None:
+        raise HTTPException(404, "Комментарий не найден.")
+    _get_owned_lesson(c["lesson_id"], user)
+    if c["user_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Удалить комментарий может только его автор или администратор.")
+    db.delete_comment(comment_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Динамика по учителю
+# ---------------------------------------------------------------------------
+
+def _ts_seconds(value) -> float | None:
+    try:
+        parts = [float(x) for x in str(value).strip().split(":")]
+    except ValueError:
+        return None
+    total = 0.0
+    for p in parts:
+        total = total * 60 + p
+    return total
+
+
+def _lesson_metrics(results: dict) -> dict:
+    """Показатели урока для графиков динамики (все в процентах, 0–100)."""
+    tt = results.get("talk_time") or {}
+    summary = results.get("summary") or {}
+    total = tt.get("total_duration_seconds") or 0
+
+    episodes = results.get("inquiry_episodes") or []
+    ep_total = ep_high = 0.0
+    for ep in episodes:
+        s, e2 = _ts_seconds(ep.get("start_timestamp")), _ts_seconds(ep.get("end_timestamp"))
+        if s is None or e2 is None or e2 <= s:
+            continue
+        ep_total += e2 - s
+        if ep.get("level") in ("level_2", "level_3", "level_4"):
+            ep_high += e2 - s
+
+    rows = results.get("alignment_rows") or []
+    strong = sum(1 for r in rows if r.get("alignment") == "Strong")
+    partial = sum(1 for r in rows if r.get("alignment") == "Partial")
+
+    crit = [r for r in (results.get("criteria_rows") or []) if r.get("opportunity") != "Not observable"]
+    crit_strong = sum(1 for r in crit if r.get("opportunity") == "Strong")
+
+    def pct(a, b):
+        return round(100 * a / b, 1) if b else None
+
+    return {
+        "duration_seconds": total or None,
+        "teacher_pct": tt.get("teacher_pct"),
+        "student_speech_pct": pct(tt.get("student_speech_seconds") or 0, total),
+        "question_count": summary.get("question_count"),
+        "higher_order_pct": summary.get("higher_order_pct"),
+        "inquiry_high_pct": pct(ep_high, ep_total),
+        "plan_strong_pct": pct(strong + 0.5 * partial, len(rows)),
+        "criteria_strong_pct": pct(crit_strong, len(crit)),
+    }
+
+
+@app.get("/api/progress")
+async def progress(user_id: int | None = None, user: dict = Depends(auth.current_user)) -> dict:
+    target_id = user["id"]
+    if user_id is not None and user_id != user["id"]:
+        if not auth.can_view_all(user):
+            raise HTTPException(403, "Динамику других учителей видят только методист и администратор.")
+        target_id = user_id
+    target = db.get_user(target_id)
+    if target is None:
+        raise HTTPException(404, "Пользователь не найден.")
+    lessons = []
+    for l in db.done_lessons_with_results(target_id):
+        lessons.append({
+            "id": l["id"],
+            "lesson_title": l["lesson_title"],
+            "subject": l["subject"],
+            "subject_key": l["subject_key"],
+            "grade": l["grade"],
+            "lesson_date": l["lesson_date"],
+            "created_at": l["created_at"],
+            "metrics": _lesson_metrics(l["results"]),
+        })
+    # Урок без даты встаёт на место по дате загрузки.
+    lessons.sort(key=lambda x: (x["lesson_date"] or time.strftime("%Y-%m-%d", time.localtime(x["created_at"])), x["created_at"]))
+    resp = {"teacher": auth.public_user(target), "lessons": lessons}
+    if auth.can_view_all(user):
+        resp["teachers"] = [t for t in db.teachers_with_lessons() if t["done_count"] or t["id"] == target_id]
+    return resp
 
 
 # ---------------------------------------------------------------------------
