@@ -19,3 +19,7 @@ templates/*.pdf
 templates/page-*.jpg
 
 .env
+
+# база данных приложения (пользователи, расшифровки уроков)
+*.sqlite3
+*.sqlite3-*

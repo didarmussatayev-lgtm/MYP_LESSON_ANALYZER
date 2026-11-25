@@ -19,7 +19,9 @@ COPY config/ ./config/
 COPY templates/ ./templates/
 COPY app/ ./app/
 
-RUN mkdir -p /srv/app/uploads /srv/app/output /srv/app/work
+# Данные (SQLite, отчёты, файлы в обработке). На Railway сюда монтируется Volume.
+ENV DATA_DIR=/data
+RUN mkdir -p /data
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
