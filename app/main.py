@@ -43,7 +43,8 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 sys.path.insert(0, str(APP_DIR))
 
 import auth  # noqa: E402
-import docx_extras  # noqa: E402
+import metrics  # noqa: E402
+import report  # noqa: E402
 import notify  # noqa: E402
 import db  # noqa: E402
 import pipeline  # noqa: E402
@@ -141,6 +142,7 @@ def _run_lesson(lesson_id: str, resume: bool = False) -> None:
             template_path=str(TEMPLATE_PATH),
             subject_frameworks_path=str(SUBJECT_FRAMEWORKS_PATH),
             subject_key=lesson["subject_key"] or None,
+            report_meta=lesson,
             lesson_language=LESSON_LANGUAGES.get(lesson.get("lesson_language") or ""),
             report_language=REPORT_LANGUAGES.get(lesson.get("report_language") or "ru", "русском"),
             on_progress=on_progress,
@@ -271,6 +273,15 @@ async def me(request: Request) -> dict:
 class PreferencesBody(BaseModel):
     ui_language: str | None = None
     email_notifications: bool | None = None
+
+
+@app.post("/api/admin/test-email")
+async def admin_test_email(admin: dict = Depends(auth.require_admin)) -> dict:
+    """Отправляет тестовое письмо администратору — проверка настройки почты."""
+    error = await run_in_threadpool(notify.send_test, admin)
+    if error:
+        raise HTTPException(502, f"Письмо не отправлено. {error}")
+    return {"ok": True, "to": admin["email"], "provider": notify.email_provider()}
 
 
 @app.post("/api/auth/preferences")
@@ -582,22 +593,40 @@ async def lesson_delete(lesson_id: str, user: dict = Depends(auth.current_user))
     return Response(status_code=204)
 
 
+def _subject_label(subject_key: str) -> str:
+    if not subject_key:
+        return ""
+    with open(SUBJECT_FRAMEWORKS_PATH, encoding="utf-8") as f:
+        subj = yaml.safe_load(f).get("subjects", {}).get(subject_key, {})
+    return subj.get("label", "")
+
+
+def _render_lesson_docx(lesson: dict) -> bytes:
+    ctx = report.build_context(
+        lesson.get("results") or {},
+        meta=lesson,
+        comments=db.list_comments(lesson["id"]),
+        subject_group=_subject_label(lesson.get("subject_key") or ""),
+    )
+    return report.render_report_bytes(ctx, str(TEMPLATE_PATH))
+
+
 @app.get("/api/lessons/{lesson_id}/report.docx")
-async def lesson_download(lesson_id: str, user: dict = Depends(auth.current_user)) -> FileResponse:
+async def lesson_download(lesson_id: str, user: dict = Depends(auth.current_user)) -> Response:
     lesson = _get_owned_lesson(lesson_id, user)
     path = lesson.get("report_path")
-    if lesson["status"] != "done" or not path or not Path(path).exists():
+    if lesson["status"] != "done" or not lesson.get("results"):
         raise HTTPException(409, "Отчёт ещё не готов.")
     parts = [lesson["lesson_date"], lesson["subject"], lesson["teacher_name"]]
     stem = "_".join(re.sub(r"[^\w\-]+", "-", p).strip("-") for p in parts if p) or "lesson"
-    # Разделы «Критерии» и «Обсуждение» дописываются при каждом скачивании:
-    # комментарии появляются уже после анализа.
+    # Отчёт собирается из шаблона при каждом скачивании: так в нём актуальные
+    # комментарии, а правки шаблона применяются и к старым урокам.
     try:
-        data = await run_in_threadpool(
-            docx_extras.build_report, path, lesson.get("results") or {}, db.list_comments(lesson_id)
-        )
-    except Exception:  # noqa: BLE001 - отдаём хотя бы основной отчёт
+        data = await run_in_threadpool(_render_lesson_docx, lesson)
+    except Exception:  # noqa: BLE001 - например, шаблон испорчен при ручной правке
         traceback.print_exc()
+        if not path or not Path(path).exists():
+            raise HTTPException(500, "Не удалось собрать Word-отчёт. Проверьте шаблон отчёта.")
         data = Path(path).read_bytes()
     filename = f"{stem}_report.docx"
     return Response(
@@ -659,55 +688,6 @@ async def comments_delete(comment_id: int, user: dict = Depends(auth.current_use
 # Динамика по учителю
 # ---------------------------------------------------------------------------
 
-def _ts_seconds(value) -> float | None:
-    try:
-        parts = [float(x) for x in str(value).strip().split(":")]
-    except ValueError:
-        return None
-    total = 0.0
-    for p in parts:
-        total = total * 60 + p
-    return total
-
-
-def _lesson_metrics(results: dict) -> dict:
-    """Показатели урока для графиков динамики (все в процентах, 0–100)."""
-    tt = results.get("talk_time") or {}
-    summary = results.get("summary") or {}
-    total = tt.get("total_duration_seconds") or 0
-
-    episodes = results.get("inquiry_episodes") or []
-    ep_total = ep_high = 0.0
-    for ep in episodes:
-        s, e2 = _ts_seconds(ep.get("start_timestamp")), _ts_seconds(ep.get("end_timestamp"))
-        if s is None or e2 is None or e2 <= s:
-            continue
-        ep_total += e2 - s
-        if ep.get("level") in ("level_2", "level_3", "level_4"):
-            ep_high += e2 - s
-
-    rows = results.get("alignment_rows") or []
-    strong = sum(1 for r in rows if r.get("alignment") == "Strong")
-    partial = sum(1 for r in rows if r.get("alignment") == "Partial")
-
-    crit = [r for r in (results.get("criteria_rows") or []) if r.get("opportunity") != "Not observable"]
-    crit_strong = sum(1 for r in crit if r.get("opportunity") == "Strong")
-
-    def pct(a, b):
-        return round(100 * a / b, 1) if b else None
-
-    return {
-        "duration_seconds": total or None,
-        "teacher_pct": tt.get("teacher_pct"),
-        "student_speech_pct": pct(tt.get("student_speech_seconds") or 0, total),
-        "question_count": summary.get("question_count"),
-        "higher_order_pct": summary.get("higher_order_pct"),
-        "inquiry_high_pct": pct(ep_high, ep_total),
-        "plan_strong_pct": pct(strong + 0.5 * partial, len(rows)),
-        "criteria_strong_pct": pct(crit_strong, len(crit)),
-    }
-
-
 @app.get("/api/progress")
 async def progress(user_id: int | None = None, user: dict = Depends(auth.current_user)) -> dict:
     target_id = user["id"]
@@ -728,7 +708,7 @@ async def progress(user_id: int | None = None, user: dict = Depends(auth.current
             "grade": l["grade"],
             "lesson_date": l["lesson_date"],
             "created_at": l["created_at"],
-            "metrics": _lesson_metrics(l["results"]),
+            "metrics": metrics.lesson_metrics(l["results"]),
         })
     # Урок без даты встаёт на место по дате загрузки.
     lessons.sort(key=lambda x: (x["lesson_date"] or time.strftime("%Y-%m-%d", time.localtime(x["created_at"])), x["created_at"]))

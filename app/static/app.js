@@ -1458,6 +1458,8 @@ async function viewAccount() {
           <label class="check-row"><input type="checkbox" id="emailNotif" ${u.email_notifications ? 'checked' : ''} ${state.emailAvailable ? '' : 'disabled'}>
             <span>${t('Присылать письма о новых комментариях и готовых отчётах')}</span></label>
           ${state.emailAvailable ? '' : `<p class="help">${t('Отправка писем не настроена на сервере — уведомления приходят только на сайте.')}</p>`}
+          ${u.role === 'admin' ? `<div><button type="button" class="btn" id="testEmail">${t('Отправить тестовое письмо себе')}</button>
+            <p class="help" id="testEmailRes" style="margin-top:6px"></p></div>` : ''}
         </div>
         <form class="panel panel-pad stack" id="pwForm">
           <h2 class="section-title">${t('Смена пароля')}</h2>
@@ -1472,6 +1474,15 @@ async function viewAccount() {
     e.preventDefault();
     try { await api('POST', '/api/auth/profile', { name: $('#pName').value }); state.user.name = $('#pName').value.trim(); toast(t('Сохранено.')); viewAccount(); }
     catch (err) { toast(err.message, 'bad'); }
+  });
+  $('#testEmail')?.addEventListener('click', async e => {
+    const btn = e.currentTarget, res = $('#testEmailRes');
+    btn.disabled = true; res.style.color = ''; res.textContent = t('Отправляем…');
+    try {
+      const r = await api('POST', '/api/admin/test-email');
+      res.textContent = t('Письмо отправлено на {email}. Проверьте почту, в том числе папку «Спам».', { email: r.to });
+    } catch (err) { res.style.color = 'var(--bad)'; res.textContent = err.message; }
+    btn.disabled = false;
   });
   $('#emailNotif').addEventListener('change', async e => {
     try { await api('POST', '/api/auth/preferences', { email_notifications: e.target.checked }); state.user.email_notifications = e.target.checked; toast(t('Сохранено.')); }

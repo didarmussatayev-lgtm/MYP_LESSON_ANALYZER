@@ -7,16 +7,21 @@
 - lesson_done   — анализ урока готов: автору урока;
 - lesson_error  — анализ остановился с ошибкой: автору урока.
 
-Почта (необязательно): задайте SMTP_HOST, SMTP_PORT (587), SMTP_USER,
-SMTP_PASSWORD, SMTP_FROM и APP_URL (адрес сайта для ссылок). Пользователь
-может отключить письма в профиле. Письмо уходит в фоновом потоке и не
+Почта (необязательно, подробно — docs/EMAIL_SETUP.md): EMAIL_FROM + один из
+способов — RESEND_API_KEY, BREVO_API_KEY (HTTPS, работают на Railway Hobby)
+или SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD (на Railway — только тариф
+Pro); APP_URL — адрес сайта для ссылок. Пользователь может отключить письма
+в профиле. Письмо уходит в фоновом потоке и не
 задерживает ответ сайта; ошибка отправки пишется в лог и ни на что не влияет.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import smtplib
+import urllib.error
+import urllib.request
 import ssl
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -93,37 +98,129 @@ def notify_comment(lesson: dict, author: dict, body: str) -> None:
     notify(recipients, lesson, "comment", author, body)
 
 
-def smtp_configured() -> bool:
-    return bool(os.environ.get("SMTP_HOST") and os.environ.get("SMTP_FROM"))
+def email_provider() -> str | None:
+    """Какой способ отправки настроен: resend | brevo | smtp | None."""
+    if not _sender_address():
+        return None
+    if os.environ.get("RESEND_API_KEY"):
+        return "resend"
+    if os.environ.get("BREVO_API_KEY"):
+        return "brevo"
+    if os.environ.get("SMTP_HOST"):
+        return "smtp"
+    return None
+
+
+def smtp_configured() -> bool:  # прежнее имя, используется в main.py
+    return email_provider() is not None
+
+
+def _sender_address() -> str:
+    return os.environ.get("EMAIL_FROM") or os.environ.get("SMTP_FROM") or ""
+
+
+def _sender_name() -> str:
+    return os.environ.get("EMAIL_FROM_NAME", "MYP Lesson Analyzer")
+
+
+def _lang(user: dict) -> str:
+    lang = user.get("ui_language") or "ru"
+    return lang if lang in ("ru", "kk", "en") else "ru"
+
+
+def _link(path: str) -> str:
+    base = os.environ.get("APP_URL", "").rstrip("/")
+    return f"{base}{path}" if base else path
 
 
 def _send_mail(user: dict, lesson: dict, kind: str, data: dict) -> None:
-    lang = user.get("ui_language") or "ru"
-    if lang not in ("ru", "kk", "en"):
-        lang = "ru"
-    base = os.environ.get("APP_URL", "").rstrip("/")
+    lang = _lang(user)
     tab = "?tab=discussion" if kind == "comment" else ""
-    link = f"{base}/#/lessons/{lesson['id']}{tab}" if base else f"/#/lessons/{lesson['id']}{tab}"
+    link = _link(f"/#/lessons/{lesson['id']}{tab}")
     subject = SUBJECTS[kind][lang].format(lesson=data["lesson_title"])
     text = BODIES[kind][lang].format(actor=data["actor_name"], excerpt=data["excerpt"], link=link) + FOOTER[lang]
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = formataddr(("MYP Lesson Analyzer", os.environ["SMTP_FROM"]))
-    msg["To"] = user["email"]
-    msg.set_content(text)
     try:
-        port = int(os.environ.get("SMTP_PORT", "587"))
-        host = os.environ["SMTP_HOST"]
-        if port == 465:
-            server = smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=20)
-        else:
-            server = smtplib.SMTP(host, port, timeout=20)
-            server.starttls(context=ssl.create_default_context())
-        with server:
-            if os.environ.get("SMTP_USER"):
-                server.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASSWORD", ""))
-            server.send_message(msg)
+        deliver(user["email"], subject, text)
     except Exception:  # noqa: BLE001 - почта не должна ломать сайт
         print(f"[notify] не удалось отправить письмо {user['email']}:")
         traceback.print_exc()
+
+
+TEST_SUBJECT = {
+    "ru": "Проверка почты MYP Lesson Analyzer",
+    "kk": "MYP Lesson Analyzer поштасын тексеру",
+    "en": "MYP Lesson Analyzer email test",
+}
+TEST_BODY = {
+    "ru": "Если вы видите это письмо, уведомления по почте настроены правильно.\n\nСайт: {link}",
+    "kk": "Бұл хатты көріп тұрсаңыз, пошта хабарламалары дұрыс бапталған.\n\nСайт: {link}",
+    "en": "If you can see this email, email notifications are set up correctly.\n\nSite: {link}",
+}
+
+
+def send_test(user: dict) -> str | None:
+    """Синхронно отправляет тестовое письмо; возвращает текст ошибки или None."""
+    if not email_provider():
+        return "Отправка писем не настроена: задайте EMAIL_FROM и ключ сервиса (см. docs/EMAIL_SETUP.md)."
+    lang = _lang(user)
+    try:
+        deliver(user["email"], TEST_SUBJECT[lang], TEST_BODY[lang].format(link=_link("/")) + FOOTER[lang])
+    except Exception as e:  # noqa: BLE001
+        return f"{type(e).__name__}: {e}"[:600]
+    return None
+
+
+def deliver(to: str, subject: str, text: str) -> None:
+    provider = email_provider()
+    if provider == "resend":
+        _post_json(
+            "https://api.resend.com/emails",
+            {"Authorization": f"Bearer {os.environ['RESEND_API_KEY']}"},
+            {"from": formataddr((_sender_name(), _sender_address())), "to": [to], "subject": subject, "text": text},
+        )
+    elif provider == "brevo":
+        _post_json(
+            "https://api.brevo.com/v3/smtp/email",
+            {"api-key": os.environ["BREVO_API_KEY"]},
+            {"sender": {"name": _sender_name(), "email": _sender_address()}, "to": [{"email": to}],
+             "subject": subject, "textContent": text},
+        )
+    elif provider == "smtp":
+        _send_smtp(to, subject, text)
+    else:
+        raise RuntimeError("email is not configured")
+
+
+def _post_json(url: str, headers: dict, payload: dict) -> None:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json", **headers},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            resp.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="ignore")[:400]
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from None
+
+
+def _send_smtp(to: str, subject: str, text: str) -> None:
+    # На Railway Hobby исходящий SMTP закрыт — используйте Resend или Brevo.
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((_sender_name(), _sender_address()))
+    msg["To"] = to
+    msg.set_content(text)
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    host = os.environ["SMTP_HOST"]
+    if port == 465:
+        server = smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=20)
+    else:
+        server = smtplib.SMTP(host, port, timeout=20)
+        server.starttls(context=ssl.create_default_context())
+    with server:
+        if os.environ.get("SMTP_USER"):
+            server.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASSWORD", ""))
+        server.send_message(msg)
