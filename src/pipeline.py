@@ -150,6 +150,9 @@ def run_pipeline(
     teacher_segs_path = _stage_path(workdir_p, "02_teacher_segments")
     step("transcribe")
     classroom_segs_path = _stage_path(workdir_p, "02_classroom_segments")
+    quality_path = _stage_path(workdir_p, "02_transcript_quality")
+    teacher_q: dict = {}
+    classroom_q: dict = {}
     if resume and teacher_segs_path.exists() and (single_track_mode or classroom_segs_path.exists()):
         teacher_segments = [Segment(**s) for s in _load_json(teacher_segs_path)]
         classroom_segments = (
@@ -160,20 +163,25 @@ def run_pipeline(
         if single_track_mode:
             progress("Этап 2/7: транскрипция трека учителя + попытка различить учитель/ученик по смыслу речи (Gemini)...")
             teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True, language_hint=lesson_language,
-                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress)
+                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress,
+                                                          stats=teacher_q)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
             classroom_segments = []
             progress("Этап 3/7: общего трека нет - пропускаю.")
         else:
             progress("Этап 2/7: транскрипция трека учителя (Gemini)...")
             teacher_segments = transcribe.transcribe_track(teacher_track, language_hint=lesson_language,
-                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress)
+                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress,
+                                                          stats=teacher_q)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
 
             progress("Этап 3/7: транскрипция общего трека класса (Gemini)...")
             classroom_segments = transcribe.transcribe_track(classroom_track, language_hint=lesson_language,
-                                                            cache_dir=str(workdir_p / "chunks_classroom"), on_progress=progress)
+                                                            cache_dir=str(workdir_p / "chunks_classroom"), on_progress=progress,
+                                                            stats=classroom_q)
             transcribe.save_segments(classroom_segments, str(classroom_segs_path))
+        _save_json(quality_path, {"teacher": teacher_q, "classroom": classroom_q})
+    transcript_quality = _load_json(quality_path) if quality_path.exists() else {}
 
     # --- Stage 3: align (Teacher/Student roles) ---
     utterances_path = _stage_path(workdir_p, "03_utterances")
@@ -303,6 +311,7 @@ def run_pipeline(
         slide_timeline=slide_timeline,
         criteria_rows=criteria_rows,
         subject_key=subject_key,
+        transcript_quality=transcript_quality,
     )
     # Веб-приложение пересобирает отчёт при каждом скачивании (с комментариями);
     # этот файл — для CLI и как запасной вариант.
@@ -326,6 +335,7 @@ def build_results(
     slide_timeline=None,
     criteria_rows: list[dict] | None = None,
     subject_key: str | None = None,
+    transcript_quality: dict | None = None,
 ) -> dict:
     """
     Структурированные результаты для веб-отчёта и списка уроков.
@@ -345,7 +355,7 @@ def build_results(
         alignment_counts[a] = alignment_counts.get(a, 0) + 1
 
     return {
-        "version": 1,
+        "version": 2,  # см. metrics.RESULTS_VERSION
         "summary": {
             "duration_seconds": talk_time.get("total_duration_seconds"),
             "teacher_pct": talk_time.get("teacher_pct"),
@@ -367,6 +377,7 @@ def build_results(
         "slide_timeline": slide_timeline,
         "subject_key": subject_key,
         "criteria_rows": criteria_rows or [],
+        "transcript_quality": transcript_quality or {},
         "utterances": [asdict(u) for u in utterances],
     }
 

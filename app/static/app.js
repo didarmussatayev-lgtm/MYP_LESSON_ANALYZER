@@ -1006,6 +1006,7 @@ function renderReport(lesson) {
 
   $('#lessonBody').innerHTML = `
     <p class="draft-note">${icon('info')}${t('Черновик, подготовленный ИИ. Проверьте выводы перед обсуждением с учителем или коучем.')}</p>
+    ${transcriptWarning(r)}
 
     <div class="kpis">
       <div class="panel kpi"><div class="k-label">${t('Длительность записи')}</div><div class="k-value">${fmtDuration(duration)}</div>
@@ -1069,12 +1070,27 @@ function renderReport(lesson) {
   if (state.query?.get('tab')) showTab(state.query.get('tab'));
 }
 
+/* Предупреждение о качестве расшифровки: модель могла «дописать» речь,
+   которой нет в аудио. Такие реплики удаляются при анализе (проверка по
+   громкости), а учителю показывается, что расшифровку стоит проверить. */
+function transcriptWarning(r) {
+  const q = r.transcript_quality || {};
+  const tracks = [q.teacher, q.classroom].filter(Boolean);
+  const dropped = tracks.reduce((a, x) => a + (x.dropped_silent_segments || 0), 0);
+  const suspicious = tracks.some(x => x.voiced_seconds != null && x.transcribed_seconds > 1.6 * x.voiced_seconds + 60);
+  if (!dropped && !suspicious) return '';
+  const parts = [];
+  if (dropped) parts.push(t('Из расшифровки удалено реплик, которых нет в аудио: {n}. Модель распознавания иногда «дописывает» речь там, где запись тихая или неразборчивая.', { n: dropped }));
+  if (suspicious) parts.push(t('Расшифровка покрывает заметно больше времени, чем в записи звучит речь, — возможны придуманные фрагменты.'));
+  return `<div class="callout warn" style="margin-bottom:16px">${icon('alert')}<div>${parts.map(esc).join(' ')} ${esc(t('Проверьте расшифровку перед обсуждением выводов.'))}</div></div>`;
+}
+
 function summaryPanel(r, tt, duration) {
   const refl = r.reflection || {};
   const total = duration || 1;
-  const teacher = tt.teacher_seconds || 0;
-  const student = tt.student_speech_seconds || 0;
-  const silence = tt.silence_attributed_to_student_seconds ?? Math.max(0, total - teacher - student);
+  const teacher = Math.min(total, Math.max(0, tt.teacher_seconds || 0));
+  const student = Math.min(total - teacher, Math.max(0, tt.student_speech_seconds || 0));
+  const silence = Math.max(0, total - teacher - student);
   const pct = v => Math.round(100 * v / total);
   const seg = (v, color, label, cls = '') => v > 0 ? `<div class="${cls}" style="flex:${v};background:${color}" tabindex="0" data-tip="<b>${label}</b><br>${fmtDuration(v)} · ${pct(v)}%"></div>` : '';
   const list = items => items?.length ? `<ol class="points">${items.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : t('<p class="subtle">Нет данных.</p>');

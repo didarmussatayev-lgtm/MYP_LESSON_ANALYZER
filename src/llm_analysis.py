@@ -97,8 +97,42 @@ def _format_utterances(utterances: list[Utterance], speaker: str | None = None) 
     for u in utterances:
         if speaker and u.speaker != speaker:
             continue
-        lines.append(f"[{u.start:.1f}-{u.end:.1f}] {u.speaker}: {u.text}")
+        lines.append(f"[{_mmss(u.start)}-{_mmss(u.end)}] {u.speaker}: {u.text}")
     return "\n".join(lines)
+
+
+def _mmss(sec: float) -> str:
+    sec = max(0, int(round(sec)))
+    h, rest = divmod(sec, 3600)
+    return f"{h}:{rest // 60:02d}:{rest % 60:02d}" if h else f"{rest // 60:02d}:{rest % 60:02d}"
+
+
+def norm_ts(value) -> str:
+    """
+    Приводит таймкод из ответа модели к MM:SS: модель иногда возвращает
+    секунды («1422.0») вместо минут и секунд.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if ":" in text:
+        return text
+    try:
+        return _mmss(float(text.replace(",", ".")))
+    except ValueError:
+        return text
+
+
+def _norm_items(items, keys=("timestamp", "start_timestamp", "end_timestamp")):
+    if isinstance(items, list):
+        for it in items:
+            if isinstance(it, dict):
+                for k in keys:
+                    if k in it:
+                        it[k] = norm_ts(it[k])
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +162,7 @@ def classify_questions(utterances: list[Utterance], taxonomy: dict) -> list[dict
     user_prompt = "Реплики учителя:\n\n" + _format_utterances(utterances, speaker="Teacher")
 
     result = _call_gemini_json(system_prompt, user_prompt)
-    return result if isinstance(result, list) else []
+    return _norm_items(result) if isinstance(result, list) else []
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +189,7 @@ def classify_inquiry_levels(utterances: list[Utterance], taxonomy: dict) -> list
     user_prompt = "Полная лента реплик урока (Teacher и Student):\n\n" + _format_utterances(utterances)
 
     result = _call_gemini_json(system_prompt, user_prompt)
-    return result if isinstance(result, list) else []
+    return _norm_items(result) if isinstance(result, list) else []
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +426,7 @@ def criteria_evidence(
                 "strand": strand,
                 "opportunity": r.get("opportunity", "Not observed"),
                 "evidence": r.get("evidence", ""),
-                "timestamp": r.get("timestamp", ""),
+                "timestamp": norm_ts(r.get("timestamp", "")),
                 "suggestion": r.get("suggestion", ""),
             })
     return out

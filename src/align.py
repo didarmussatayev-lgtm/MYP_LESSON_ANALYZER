@@ -103,6 +103,20 @@ def align_single_track(segments: list[Segment]) -> list[Utterance]:
     return utterances
 
 
+def _union_length(intervals: list[tuple[float, float]]) -> float:
+    total, cur_s, cur_e = 0.0, None, None
+    for s, e in sorted(intervals):
+        if cur_e is None or s > cur_e:
+            if cur_e is not None:
+                total += cur_e - cur_s
+            cur_s, cur_e = s, e
+        else:
+            cur_e = max(cur_e, e)
+    if cur_e is not None:
+        total += cur_e - cur_s
+    return total
+
+
 def talk_time_summary(utterances: list[Utterance], total_duration_seconds: float | None = None) -> dict:
     """
     total_duration_seconds - полная длительность урока (из sync.get_audio_duration_seconds).
@@ -121,11 +135,30 @@ def talk_time_summary(utterances: list[Utterance], total_duration_seconds: float
     реального аудио) - старое поведение: проценты от суммы времени речи,
     без учёта тишины.
     """
-    teacher_time = sum(u.end - u.start for u in utterances if u.speaker == "Teacher")
-    student_speech_time = sum(u.end - u.start for u in utterances if u.speaker == "Student")
+    # Время считается как объединение интервалов, обрезанных по длине записи:
+    # перекрывающиеся реплики не учитываются дважды, а «битые» таймкоды
+    # (конец раньше начала, время за пределами записи) не дают отрицательных
+    # или больше-100% долей. Пересечение речи учителя и учеников отдаётся
+    # учителю, чтобы сумма долей не превышала 100%.
+    limit = total_duration_seconds if total_duration_seconds else float("inf")
 
-    teacher_count = sum(1 for u in utterances if u.speaker == "Teacher")
-    student_count = sum(1 for u in utterances if u.speaker == "Student")
+    def clipped(speaker):
+        out = []
+        for u in utterances:
+            if u.speaker != speaker:
+                continue
+            s, e = max(0.0, u.start), min(limit, u.end)
+            if e > s:
+                out.append((s, e))
+        return out
+
+    teacher_iv = clipped("Teacher")
+    student_iv = clipped("Student")
+    teacher_time = _union_length(teacher_iv)
+    student_speech_time = max(0.0, _union_length(teacher_iv + student_iv) - teacher_time)
+
+    teacher_count = len(teacher_iv)
+    student_count = len(student_iv)
 
     if total_duration_seconds is not None:
         silence_seconds = max(0.0, total_duration_seconds - teacher_time - student_speech_time)
