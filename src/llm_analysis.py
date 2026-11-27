@@ -174,6 +174,9 @@ def classify_inquiry_levels(utterances: list[Utterance], taxonomy: dict) -> list
     levels_text = "\n".join(
         f"- {key} ({info['name']}): {info['definition'].strip()}" for key, info in levels.items()
     )
+    level_keys = "|".join(levels)
+    lesson_start = _mmss(utterances[0].start) if utterances else "00:00"
+    lesson_end = _mmss(max((u.end for u in utterances), default=0))
 
     system_prompt = f"""Ты — ассистент для педагогического анализа уроков по методике IB MYP.
 Раздели весь урок на смысловые эпизоды (несколько минут диалога вокруг одной
@@ -181,10 +184,17 @@ def classify_inquiry_levels(utterances: list[Utterance], taxonomy: dict) -> list
 
 {levels_text}
 
-Верни ТОЛЬКО валидный JSON-массив без markdown. Каждый элемент:
-{{"start_timestamp": "MM:SS", "end_timestamp": "MM:SS", "level": "level_1|level_2|level_4", "rationale": "1-2 предложения с конкретной привязкой к тому что происходило", "evidence_quote": "короткая цитата-подтверждение"}}
+Как различать уровни: смотри, КТО формулирует вопрос (учитель — уровни 1–3,
+ученики — уровень 4) и КТО решает, КАК искать ответ (учитель даёт способ —
+уровень 2, ученики выбирают способ сами — уровень 3). Если ученики просто
+отвечают на вопросы учителя — уровень 1.
 
-Эпизоды должны покрывать урок последовательно, без больших пропусков."""
+Верни ТОЛЬКО валидный JSON-массив без markdown. Каждый элемент:
+{{"start_timestamp": "MM:SS", "end_timestamp": "MM:SS", "level": "{level_keys}", "rationale": "1-2 предложения с конкретной привязкой к тому что происходило", "evidence_quote": "короткая цитата-подтверждение"}}
+
+Эпизоды должны идти по порядку и покрывать ВЕСЬ урок от {lesson_start} до
+{lesson_end} без пропусков: конец одного эпизода — начало следующего. Паузы и
+организационные моменты включай в соседний эпизод."""
 
     user_prompt = "Полная лента реплик урока (Teacher и Student):\n\n" + _format_utterances(utterances)
 

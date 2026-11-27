@@ -22,8 +22,8 @@ from metrics import lesson_metrics, ts_seconds
 
 LEVEL_LABELS = {
     "level_1": "Level 1 — Teacher asks / student answers",
-    "level_2": "Level 2 — Teacher gives question / student investigates",
-    "level_3": "Level 3",
+    "level_2": "Level 2 — Teacher gives question and method / students investigate",
+    "level_3": "Level 3 — Teacher gives question / students decide how to investigate",
     "level_4": "Level 4 — Student formulates / investigates / evaluates / reflects",
 }
 LEVEL_SHORT = {"level_1": "Level 1", "level_2": "Level 2", "level_3": "Level 3", "level_4": "Level 4"}

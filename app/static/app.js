@@ -243,10 +243,11 @@ const CATEGORY_ORDER = ['recall', 'understanding', 'application', 'analysis'];
 
 const LEVEL = {
   level_1: { short: t('Уровень 1'), label: t('Учитель спрашивает — ученик отвечает'), cls: 'l1' },
-  level_2: { short: t('Уровень 2'), label: t('Учитель ставит вопрос — ученики исследуют'), cls: 'l2' },
+  level_2: { short: t('Уровень 2'), label: t('Учитель даёт вопрос и способ работы — ученики исследуют'), cls: 'l2' },
+  level_3: { short: t('Уровень 3'), label: t('Учитель даёт вопрос — ученики сами решают, как исследовать'), cls: 'l3' },
   level_4: { short: t('Уровень 4'), label: t('Ученики формулируют вопрос, исследуют и рефлексируют'), cls: 'l4' },
 };
-const LEVEL_COLOR = { level_1: 'var(--level-1)', level_2: 'var(--level-2)', level_4: 'var(--level-4)' };
+const LEVEL_COLOR = { level_1: 'var(--level-1)', level_2: 'var(--level-2)', level_3: 'var(--level-3)', level_4: 'var(--level-4)' };
 
 const ALIGN = {
   'Strong': { label: t('Реализовано'), cls: 'good' },
@@ -1262,6 +1263,7 @@ function inquiryPanel(episodes, duration) {
         <div class="time-axis">${ticks.map((tk, i) => `<span style="left:${i * 25}%">${tk}</span>`).join('')}</div>
         <div class="legend">
           ${Object.entries(LEVEL).map(([k, v]) => `<span><i class="sw" style="background:${LEVEL_COLOR[k]}"></i>${v.short} — ${v.label} <b>${byLevel[k] ? Math.round(100 * byLevel[k] / end) + '%' : '0%'}</b></span>`).join('')}
+          ${(() => { const rest = end - Object.values(byLevel).reduce((a, b) => a + b, 0); return rest / end > 0.02 ? `<span><i class="sw sw-none"></i>${t('Не отнесено к эпизодам')} <b>${Math.round(100 * rest / end)}%</b></span>` : ''; })()}
         </div>
       </div>
     </div>
