@@ -15,12 +15,16 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
+from pathlib import Path
 
 from google import genai
 from google.genai import types
@@ -127,41 +131,136 @@ def _clean_json_text(text: str) -> str:
     return re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
 
 
-def transcribe_track(audio_path: str, identify_speakers: bool = False, language_hint: str | None = None) -> list[Segment]:
-    """
-    Загружает аудиофайл через Gemini Files API (работает для файлов любого
-    разумного размера, в т.ч. > 20MB, что типично для 40-минутного трека)
-    и просит модель вернуть JSON-транскрипт с таймкодами в секундах.
+# ---------------------------------------------------------------------------
+# Длинные записи режутся на куски.
+#
+# Почему: ответ модели ограничен по длине, а расшифровка 80-минутного урока
+# одним ответом к нему приближается (обрыв = невалидный JSON = ошибка всего
+# анализа). Кроме того, на длинном аудио Gemini хуже держит таймкоды к концу
+# записи. Куски по ~10 минут решают обе проблемы, расшифровываются
+# параллельно и кэшируются по отдельности: при повторном запуске заново
+# идут только те куски, которые не получились.
+#
+# Как склеиваются: каждый кусок захватывает OVERLAP_SEC аудио с обеих
+# сторон от своей «номинальной» границы. Из куска i берутся только реплики,
+# начавшиеся в его номинальном интервале [i*CHUNK, (i+1)*CHUNK) — так фраза
+# на стыке попадает в расшифровку ровно один раз и целиком.
+# ---------------------------------------------------------------------------
 
-    identify_speakers=True - используется в single-track режиме (нет
-    отдельного трека класса): модель дополнительно пытается угадать
-    teacher/student по содержанию речи (см. TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT).
-    В обычном two-track режиме не нужно - там роль определяется надёжнее,
-    через align.py.
-    """
+CHUNK_SEC = int(os.environ.get("TRANSCRIBE_CHUNK_SEC", "600"))
+OVERLAP_SEC = 15
+PARALLEL = int(os.environ.get("TRANSCRIBE_PARALLEL", "4"))
+MAX_ATTEMPTS = 3
+
+
+def _duration(path: str) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return float(out)
+
+
+def _plan_chunks(total: float) -> list[tuple[int, float, float, float, float]]:
+    """[(index, nominal_start, nominal_end, audio_start, audio_end)]"""
+    chunks = []
+    i, start = 0, 0.0
+    while start < total:
+        end = min(total, start + CHUNK_SEC)
+        # хвост короче минуты присоединяем к предыдущему куску
+        if total - end < 60:
+            end = total
+        chunks.append((i, start, end, max(0.0, start - OVERLAP_SEC), min(total, end + OVERLAP_SEC)))
+        i, start = i + 1, end
+    return chunks
+
+
+def _cut(src: str, start: float, length: float, dest: str) -> None:
+    subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
+         "-i", src, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k", dest],
+        check=True, capture_output=True,
+    )
+
+
+def _transcribe_file(path: str, prompt: str) -> list[dict]:
+    """Один запрос к Gemini для одного файла; повторяет при сбоях и обрыве JSON."""
     client = _get_client()
+    mime_type = _guess_audio_mime_type(path)
 
-    mime_type = _guess_audio_mime_type(audio_path)
-
-    # Gemini SDK передаёт имя файла в HTTP-заголовке запроса на загрузку, а
-    # HTTP-заголовки должны быть ASCII/latin-1. Имена файлов с кириллицей
-    # (типично для записей с телефона - названия улиц, папок и т.п.) ломают
-    # запрос ещё до отправки в Google (UnicodeEncodeError на стороне httpx).
-    # Поэтому перед загрузкой всегда копируем файл во временный с безопасным
-    # ASCII-именем - вне зависимости от того, как называется исходный файл.
-    ext = os.path.splitext(audio_path)[1]
+    # Gemini SDK передаёт имя файла в HTTP-заголовке, а заголовки должны быть
+    # ASCII: имена с кириллицей (типично для записей с телефона) ломают запрос.
+    # Поэтому загружаем копию с безопасным именем.
+    ext = os.path.splitext(path)[1]
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
         safe_path = tmp.name
-    shutil.copyfile(audio_path, safe_path)
+    shutil.copyfile(path, safe_path)
 
+    last_error: Exception | None = None
     try:
-        uploaded_file = client.files.upload(
-            file=safe_path,
-            config=types.UploadFileConfig(mime_type=mime_type),
-        )
+        uploaded = client.files.upload(file=safe_path, config=types.UploadFileConfig(mime_type=mime_type))
     finally:
         os.remove(safe_path)
+    try:
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=[prompt, uploaded],
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                raw = json.loads(_clean_json_text(response.text or ""))
+                if not isinstance(raw, list):
+                    raise ValueError("ожидался JSON-массив")
+                return raw
+            except Exception as e:  # noqa: BLE001 - сеть, 429/5xx, обрыв JSON
+                last_error = e
+                time.sleep(3 * (attempt + 1) ** 2)
+        raise ValueError(f"Gemini не вернул корректную расшифровку после {MAX_ATTEMPTS} попыток: {last_error}")
+    finally:
+        # Аудио с голосами детей не храним у Google дольше необходимого
+        # (сами файлы и так удаляются через 48 часов).
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:  # noqa: BLE001
+            pass
 
+
+def _to_segments(raw: list[dict], offset: float, keep_from: float, keep_to: float, limit: float) -> list[Segment]:
+    out = []
+    for s in raw:
+        text = str(s.get("text", "")).strip()
+        if not text:
+            continue
+        try:
+            start = float(s["start_sec"]) + offset
+            end = float(s["end_sec"]) + offset
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end < start:
+            end = start
+        if not (keep_from <= start < keep_to):
+            continue
+        out.append(Segment(start=round(start, 2), end=round(min(end, limit), 2), text=text,
+                           speaker_hint=s.get("speaker_role")))
+    return out
+
+
+def transcribe_track(
+    audio_path: str,
+    identify_speakers: bool = False,
+    language_hint: str | None = None,
+    cache_dir: str | None = None,
+    on_progress=None,
+) -> list[Segment]:
+    """
+    Расшифровывает запись через Gemini. Короткие записи — одним запросом,
+    длинные — кусками по CHUNK_SEC секунд параллельно (см. комментарий выше).
+
+    cache_dir — папка для промежуточных результатов по кускам (resume).
+    on_progress(msg) — сообщения о ходе работы для журнала урока.
+    """
     prompt = TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT if identify_speakers else TRANSCRIBE_PROMPT
     if language_hint:
         prompt += (
@@ -169,33 +268,54 @@ def transcribe_track(audio_path: str, identify_speakers: bool = False, language_
             "записывай на том языке, на котором они прозвучали, не переводи.\n"
         )
 
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=[prompt, uploaded_file],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
-    )
+    total = _duration(audio_path)
+    chunks = _plan_chunks(total)
+    if len(chunks) == 1:
+        segments = _to_segments(_transcribe_file(audio_path, prompt), 0.0, 0.0, float("inf"), total)
+        print(f"[{audio_path}] Gemini transcription: {len(segments)} segments")
+        return segments
 
-    raw_text = response.text or ""
-    cleaned = _clean_json_text(raw_text)
+    work = Path(cache_dir) if cache_dir else Path(tempfile.mkdtemp(prefix="chunks_"))
+    work.mkdir(parents=True, exist_ok=True)
+    say = on_progress or print
+    say(f"  Запись {total / 60:.0f} мин — расшифровка {len(chunks)} частями по {CHUNK_SEC // 60} мин")
 
-    try:
-        raw_segments = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise ValueError(
-            f"Gemini вернул не-JSON ответ при транскрипции {audio_path}:\n{raw_text[:2000]}"
-        ) from e
+    def run(chunk) -> list[Segment]:
+        i, n_start, n_end, a_start, a_end = chunk
+        cache = work / f"chunk_{i:03d}.json"
+        if cache.exists():
+            raw = json.loads(cache.read_text(encoding="utf-8"))
+        else:
+            part = work / f"chunk_{i:03d}.mp3"
+            _cut(audio_path, a_start, a_end - a_start, str(part))
+            try:
+                raw = _transcribe_file(str(part), prompt)
+            finally:
+                part.unlink(missing_ok=True)
+            cache.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        # первый кусок забирает всё до своей границы, последний — всё после
+        keep_from = 0.0 if i == 0 else n_start
+        keep_to = float("inf") if i == len(chunks) - 1 else n_end
+        return _to_segments(raw, a_start, keep_from, keep_to, total)
 
-    segments = [
-        Segment(
-            start=float(s["start_sec"]),
-            end=float(s["end_sec"]),
-            text=s["text"].strip(),
-            speaker_hint=s.get("speaker_role"),  # None если identify_speakers=False - поля нет в ответе
-        )
-        for s in raw_segments
-        if s.get("text", "").strip()
-    ]
-    print(f"[{audio_path}] Gemini transcription: {len(segments)} segments")
+    results: dict[int, list[Segment]] = {}
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=max(1, PARALLEL)) as pool:
+        futures = {pool.submit(run, c): c[0] for c in chunks}
+        for done, fut in enumerate(as_completed(futures), 1):
+            idx = futures[fut]
+            try:
+                results[idx] = fut.result()
+                say(f"  Расшифрована часть {done} из {len(chunks)}")
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"часть {idx + 1}: {e}")
+    if errors:
+        # Удачные части уже в кэше: повторный запуск расшифрует только эти.
+        raise ValueError("Не удалось расшифровать " + "; ".join(errors))
+
+    segments = [s for i in sorted(results) for s in results[i]]
+    segments.sort(key=lambda s: s.start)
+    print(f"[{audio_path}] Gemini transcription: {len(segments)} segments from {len(chunks)} chunks")
     return segments
 
 

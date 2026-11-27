@@ -159,17 +159,20 @@ def run_pipeline(
     else:
         if single_track_mode:
             progress("Этап 2/7: транскрипция трека учителя + попытка различить учитель/ученик по смыслу речи (Gemini)...")
-            teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True, language_hint=lesson_language)
+            teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True, language_hint=lesson_language,
+                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
             classroom_segments = []
             progress("Этап 3/7: общего трека нет - пропускаю.")
         else:
             progress("Этап 2/7: транскрипция трека учителя (Gemini)...")
-            teacher_segments = transcribe.transcribe_track(teacher_track, language_hint=lesson_language)
+            teacher_segments = transcribe.transcribe_track(teacher_track, language_hint=lesson_language,
+                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
 
             progress("Этап 3/7: транскрипция общего трека класса (Gemini)...")
-            classroom_segments = transcribe.transcribe_track(classroom_track, language_hint=lesson_language)
+            classroom_segments = transcribe.transcribe_track(classroom_track, language_hint=lesson_language,
+                                                            cache_dir=str(workdir_p / "chunks_classroom"), on_progress=progress)
             transcribe.save_segments(classroom_segments, str(classroom_segs_path))
 
     # --- Stage 3: align (Teacher/Student roles) ---
