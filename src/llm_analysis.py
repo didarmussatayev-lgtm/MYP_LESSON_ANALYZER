@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 
 import yaml
 from google import genai
@@ -28,6 +29,27 @@ from common import Utterance
 MODEL = "gemini-3.6-flash"  # см. README про выбор модели / актуальные названия - проверять периодически
 
 _client: genai.Client | None = None
+
+# Язык пояснений в ответах модели. Хранится на поток: анализ уроков идёт в
+# фоновом потоке, и язык одного урока не должен «протечь» в другой.
+_lang = threading.local()
+
+
+def set_feedback_language(language: str) -> None:
+    """language — в предложном падеже: «русском», «казахском», «английском»."""
+    _lang.value = language
+
+
+def _language_instruction() -> str:
+    language = getattr(_lang, "value", None) or "русском"
+    return (
+        f"\n\nЯЗЫК ОТВЕТА: все пояснения, выводы и рекомендации (rationale, summary, "
+        f"strengths, areas_for_development, suggested_next_lesson_strategy, suggestion, "
+        f"пересказы в observed_evidence/evidence) пиши на {language} языке. Цитаты из урока "
+        f"(quote, evidence_quote и цитаты внутри пояснений) оставляй на языке оригинала. "
+        f"Коды и служебные значения (category, level, alignment, opportunity, field, "
+        f"strand_id) не переводи."
+    )
 
 
 def _get_client() -> genai.Client:
@@ -58,7 +80,7 @@ def _call_gemini_json(system_prompt: str, user_prompt: str) -> dict | list:
         model=MODEL,
         contents=user_prompt,
         config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
+            system_instruction=system_prompt + _language_instruction(),
             response_mime_type="application/json",
         ),
     )
@@ -218,7 +240,7 @@ atl_skills - что учитель собирался делать методи�
 том, что происходило на уроке (talk-time, распределение категорий вопросов,
 распределение inquiry-level по эпизодам урока).
 
-Напиши ОДИН связный абзац (3-5 предложений) на английском, сравнивающий
+Напиши ОДИН связный абзац (3-5 предложений), сравнивающий
 заявленный подход с тем, что реально наблюдалось. Будь конкретен - ссылайся
 на цифры и категории из данных, а не пиши общими фразами. Если заявленный
 подход и наблюдаемая практика расходятся - прямо это отметь. Если план не
@@ -346,7 +368,7 @@ def criteria_evidence(
 
 Верни ТОЛЬКО валидный JSON-массив без markdown, по одному элементу на каждый strand,
 в том же порядке:
-{{"strand_id": "A.1", "opportunity": "Strong|Partial|Not observed|Not observable", "evidence": "конкретная цитата/пересказ на языке урока или пусто", "timestamp": "MM:SS или пусто", "suggestion": "одна короткая конкретная идея, как дать ученикам больше возможности по этому strand (на русском); пусто, если Strong"}}
+{{"strand_id": "A.1", "opportunity": "Strong|Partial|Not observed|Not observable", "evidence": "конкретная цитата/пересказ на языке урока или пусто", "timestamp": "MM:SS или пусто", "suggestion": "одна короткая конкретная идея, как дать ученикам больше возможности по этому strand; пусто, если Strong"}}
 
 Не придумывай свидетельств, которых нет в транскрипте."""
 

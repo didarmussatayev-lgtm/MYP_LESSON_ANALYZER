@@ -25,6 +25,7 @@ import sys
 import time
 import traceback
 import uuid
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -42,6 +43,9 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 sys.path.insert(0, str(APP_DIR))
 
 import auth  # noqa: E402
+import metrics  # noqa: E402
+import report  # noqa: E402
+import notify  # noqa: E402
 import db  # noqa: E402
 import pipeline  # noqa: E402
 import recordings  # noqa: E402
@@ -88,6 +92,8 @@ def _friendly_error(exc: Exception) -> str:
         return "Сервис анализа не настроен: не задан ключ Gemini API. Сообщите администратору."
     if "429" in text or "RESOURCE_EXHAUSTED" in text or "quota" in text.lower():
         return "Сервис распознавания временно перегружен или исчерпан лимит. Попробуйте запустить анализ повторно через несколько минут."
+    if "Не удалось расшифровать" in text or "корректную расшифровку" in text:
+        return "Не удалось расшифровать часть записи: сервис распознавания ответил с ошибкой. Запустите анализ повторно — уже расшифрованные части сохранены и не будут оплачены заново."
     if "не-JSON" in text:
         return "Модель вернула некорректный ответ на одном из этапов. Запустите анализ повторно — уже пройденные этапы не будут оплачены заново."
     if any(s in text.lower() for s in ("decode", "ffmpeg", "audio", "format")):
@@ -138,6 +144,9 @@ def _run_lesson(lesson_id: str, resume: bool = False) -> None:
             template_path=str(TEMPLATE_PATH),
             subject_frameworks_path=str(SUBJECT_FRAMEWORKS_PATH),
             subject_key=lesson["subject_key"] or None,
+            report_meta=lesson,
+            lesson_language=LESSON_LANGUAGES.get(lesson.get("lesson_language") or ""),
+            report_language=REPORT_LANGUAGES.get(lesson.get("report_language") or "ru", "русском"),
             on_progress=on_progress,
             on_step=on_step,
         )
@@ -148,6 +157,7 @@ def _run_lesson(lesson_id: str, resume: bool = False) -> None:
             error_public=_friendly_error(e),
             error_detail=f"{e}\n\n{traceback.format_exc()}",
         )
+        _safe_notify(lambda: notify.notify({lesson["user_id"]}, lesson, "lesson_error"))
         # Аудио и workdir НЕ удаляем: пользователь может нажать «Повторить»,
         # и пайплайн продолжит с последнего успешного этапа.
         return
@@ -161,6 +171,14 @@ def _run_lesson(lesson_id: str, resume: bool = False) -> None:
         upload_paths={},
     )
     _delete_sources(lesson_id)
+    _safe_notify(lambda: notify.notify({lesson["user_id"]}, lesson, "lesson_done"))
+
+
+def _safe_notify(fn) -> None:
+    try:
+        fn()
+    except Exception:  # noqa: BLE001 - уведомление не должно ломать обработку
+        traceback.print_exc()
 
 
 def _delete_sources(lesson_id: str) -> None:
@@ -250,7 +268,63 @@ async def me(request: Request) -> dict:
         user = auth.current_user(request)
     except HTTPException:
         return {"user": None, "needs_setup": db.count_users() == 0}
-    return {"user": auth.public_user(user)}
+    return {"user": auth.public_user(user), "unread": db.unread_notifications(user["id"]),
+            "email_available": notify.smtp_configured()}
+
+
+class PreferencesBody(BaseModel):
+    ui_language: str | None = None
+    email_notifications: bool | None = None
+
+
+@app.post("/api/admin/test-email")
+async def admin_test_email(admin: dict = Depends(auth.require_admin)) -> dict:
+    """Отправляет тестовое письмо администратору — проверка настройки почты."""
+    error = await run_in_threadpool(notify.send_test, admin)
+    if error:
+        raise HTTPException(502, f"Письмо не отправлено. {error}")
+    return {"ok": True, "to": admin["email"], "provider": notify.email_provider()}
+
+
+@app.post("/api/auth/preferences")
+async def preferences(body: PreferencesBody, user: dict = Depends(auth.current_user)) -> dict:
+    fields: dict = {}
+    if body.ui_language is not None:
+        if body.ui_language not in ("ru", "kk", "en"):
+            raise HTTPException(400, "Неизвестный язык.")
+        fields["ui_language"] = body.ui_language
+    if body.email_notifications is not None:
+        fields["email_notifications"] = 1 if body.email_notifications else 0
+    db.update_user(user["id"], **fields)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Уведомления
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notifications")
+async def notifications_list(user: dict = Depends(auth.current_user)) -> dict:
+    return {"notifications": db.list_notifications(user["id"]), "unread": db.unread_notifications(user["id"])}
+
+
+@app.get("/api/notifications/unread")
+async def notifications_unread(user: dict = Depends(auth.current_user)) -> dict:
+    return {"unread": db.unread_notifications(user["id"])}
+
+
+class ReadBody(BaseModel):
+    ids: list[int] | None = None
+    lesson_id: str | None = None
+    all: bool = False
+
+
+@app.post("/api/notifications/read")
+async def notifications_read(body: ReadBody, user: dict = Depends(auth.current_user)) -> dict:
+    if not (body.ids or body.lesson_id or body.all):
+        raise HTTPException(400, "Не указано, какие уведомления отметить.")
+    db.mark_notifications_read(user["id"], ids=body.ids, lesson_id=body.lesson_id)
+    return {"unread": db.unread_notifications(user["id"])}
 
 
 class PasswordChangeBody(BaseModel):
@@ -298,7 +372,7 @@ async def users_create(body: NewUserBody, admin: dict = Depends(auth.require_adm
     email = body.email.strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise HTTPException(400, "Некорректный email.")
-    if body.role not in ("teacher", "admin"):
+    if body.role not in auth.ROLES:
         raise HTTPException(400, "Неизвестная роль.")
     if db.get_user_by_email(email):
         raise HTTPException(409, "Пользователь с таким email уже существует.")
@@ -325,7 +399,7 @@ async def users_update(user_id: int, body: UserPatchBody, admin: dict = Depends(
     if body.name is not None:
         fields["name"] = body.name.strip()
     if body.role is not None:
-        if body.role not in ("teacher", "admin"):
+        if body.role not in auth.ROLES:
             raise HTTPException(400, "Неизвестная роль.")
         fields["role"] = body.role
     if body.is_active is not None:
@@ -343,10 +417,19 @@ async def users_update(user_id: int, body: UserPatchBody, admin: dict = Depends(
 # Уроки
 # ---------------------------------------------------------------------------
 
-def _get_owned_lesson(lesson_id: str, user: dict) -> dict:
+def _get_owned_lesson(lesson_id: str, user: dict, write: bool = False) -> dict:
+    """
+    Просмотр — владелец, методист, администратор.
+    Изменение (повтор, удаление) — только владелец и администратор.
+    """
     lesson = db.get_lesson(lesson_id)
-    if lesson is None or (lesson["user_id"] != user["id"] and user["role"] != "admin"):
+    if lesson is None:
         raise HTTPException(404, "Урок не найден.")
+    is_owner = lesson["user_id"] == user["id"]
+    if not (is_owner or auth.can_view_all(user)):
+        raise HTTPException(404, "Урок не найден.")
+    if write and not (is_owner or user["role"] == "admin"):
+        raise HTTPException(403, "Изменять урок может только его автор или администратор.")
     return lesson
 
 
@@ -373,6 +456,9 @@ def _save_upload(upload: UploadFile, dest_dir: Path, prefix: str, allowed_ext: s
     return dest
 
 
+LESSON_LANGUAGES = {"ru": "русский", "kk": "казахский", "en": "английский", "mixed": "смешанный (несколько языков)"}
+REPORT_LANGUAGES = {"ru": "русском", "kk": "казахском", "en": "английском"}
+
 PLANNED_FIELDS = [
     "key_concept", "related_concept", "global_context", "statement_of_inquiry",
     "inquiry_questions", "learning_objectives", "atl_skills", "learner_profile",
@@ -392,6 +478,8 @@ async def create_lesson(
     lesson_date: str = Form(""),
     lesson_title: str = Form(""),
     grade: str = Form(""),
+    lesson_language: str = Form(""),
+    report_language: str = Form("ru"),
     key_concept: str = Form(""),
     related_concept: str = Form(""),
     global_context: str = Form(""),
@@ -435,6 +523,8 @@ async def create_lesson(
         "lesson_date": lesson_date.strip(),
         "lesson_title": lesson_title.strip(),
         "grade": grade.strip(),
+        "lesson_language": lesson_language if lesson_language in LESSON_LANGUAGES else "",
+        "report_language": report_language if report_language in REPORT_LANGUAGES else "ru",
     }
     planned_values = {
         "key_concept": key_concept,
@@ -464,7 +554,7 @@ async def create_lesson(
 
 @app.get("/api/lessons")
 async def lessons_list(scope: str = "mine", user: dict = Depends(auth.current_user)) -> dict:
-    all_lessons = scope == "all" and user["role"] == "admin"
+    all_lessons = scope == "all" and auth.can_view_all(user)
     return {"lessons": db.list_lessons(None if all_lessons else user["id"])}
 
 
@@ -477,13 +567,15 @@ async def lesson_detail(lesson_id: str, user: dict = Depends(auth.current_user))
         lesson.pop("error_detail", None)
     owner = db.get_user(lesson["user_id"])
     lesson["owner_name"] = owner["name"] if owner else ""
-    lesson["can_retry"] = lesson["status"] == "error"
+    can_write = lesson["user_id"] == user["id"] or user["role"] == "admin"
+    lesson["can_retry"] = lesson["status"] == "error" and can_write
+    lesson["can_delete"] = can_write
     return {"lesson": lesson}
 
 
 @app.post("/api/lessons/{lesson_id}/retry")
 async def lesson_retry(lesson_id: str, user: dict = Depends(auth.current_user)) -> dict:
-    lesson = _get_owned_lesson(lesson_id, user)
+    lesson = _get_owned_lesson(lesson_id, user, write=True)
     if lesson["status"] != "error":
         raise HTTPException(409, "Повторный запуск возможен только после ошибки.")
     db.update_lesson(lesson_id, status="queued", error_public=None, error_detail=None)
@@ -494,7 +586,7 @@ async def lesson_retry(lesson_id: str, user: dict = Depends(auth.current_user)) 
 
 @app.delete("/api/lessons/{lesson_id}")
 async def lesson_delete(lesson_id: str, user: dict = Depends(auth.current_user)) -> Response:
-    lesson = _get_owned_lesson(lesson_id, user)
+    lesson = _get_owned_lesson(lesson_id, user, write=True)
     if lesson["status"] in ("queued", "running"):
         raise HTTPException(409, "Урок ещё обрабатывается. Удалить можно после завершения.")
     _delete_sources(lesson_id)
@@ -503,22 +595,129 @@ async def lesson_delete(lesson_id: str, user: dict = Depends(auth.current_user))
     return Response(status_code=204)
 
 
+def _subject_label(subject_key: str) -> str:
+    if not subject_key:
+        return ""
+    with open(SUBJECT_FRAMEWORKS_PATH, encoding="utf-8") as f:
+        subj = yaml.safe_load(f).get("subjects", {}).get(subject_key, {})
+    return subj.get("label", "")
+
+
+def _render_lesson_docx(lesson: dict) -> bytes:
+    ctx = report.build_context(
+        lesson.get("results") or {},
+        meta=lesson,
+        comments=db.list_comments(lesson["id"]),
+        subject_group=_subject_label(lesson.get("subject_key") or ""),
+    )
+    return report.render_report_bytes(ctx, str(TEMPLATE_PATH))
+
+
 @app.get("/api/lessons/{lesson_id}/report.docx")
-async def lesson_download(lesson_id: str, user: dict = Depends(auth.current_user)) -> FileResponse:
+async def lesson_download(lesson_id: str, user: dict = Depends(auth.current_user)) -> Response:
     lesson = _get_owned_lesson(lesson_id, user)
     path = lesson.get("report_path")
-    if lesson["status"] != "done" or not path or not Path(path).exists():
+    if lesson["status"] != "done" or not lesson.get("results"):
         raise HTTPException(409, "Отчёт ещё не готов.")
     parts = [lesson["lesson_date"], lesson["subject"], lesson["teacher_name"]]
     stem = "_".join(re.sub(r"[^\w\-]+", "-", p).strip("-") for p in parts if p) or "lesson"
-    return FileResponse(
-        path,
-        filename=f"{stem}_report.docx",
+    # Отчёт собирается из шаблона при каждом скачивании: так в нём актуальные
+    # комментарии, а правки шаблона применяются и к старым урокам.
+    try:
+        data = await run_in_threadpool(_render_lesson_docx, lesson)
+    except Exception:  # noqa: BLE001 - например, шаблон испорчен при ручной правке
+        traceback.print_exc()
+        if not path or not Path(path).exists():
+            raise HTTPException(500, "Не удалось собрать Word-отчёт. Проверьте шаблон отчёта.")
+        data = Path(path).read_bytes()
+    filename = f"{stem}_report.docx"
+    return Response(
+        content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename=\"lesson_report.docx\"; filename*=UTF-8''{quote(filename)}"},
     )
 
 
 app.include_router(recordings.router)
+
+
+# ---------------------------------------------------------------------------
+# Комментарии к отчёту
+# ---------------------------------------------------------------------------
+
+COMMENT_SECTIONS = {"general", "summary", "plan", "criteria", "questions", "inquiry", "transcript"}
+
+
+class CommentBody(BaseModel):
+    body: str
+    section: str = "general"
+
+
+@app.get("/api/lessons/{lesson_id}/comments")
+async def comments_list(lesson_id: str, user: dict = Depends(auth.current_user)) -> dict:
+    _get_owned_lesson(lesson_id, user)
+    return {"comments": db.list_comments(lesson_id)}
+
+
+@app.post("/api/lessons/{lesson_id}/comments")
+async def comments_add(lesson_id: str, body: CommentBody, user: dict = Depends(auth.current_user)) -> dict:
+    _get_owned_lesson(lesson_id, user)
+    text = body.body.strip()
+    if not text:
+        raise HTTPException(400, "Комментарий пустой.")
+    if len(text) > 5000:
+        raise HTTPException(400, "Комментарий длиннее 5000 символов.")
+    section = body.section if body.section in COMMENT_SECTIONS else "general"
+    cid = db.add_comment(lesson_id, user["id"], section, text)
+    lesson = db.get_lesson(lesson_id)
+    _safe_notify(lambda: notify.notify_comment(lesson, user, text))
+    return {"id": cid}
+
+
+@app.delete("/api/comments/{comment_id}")
+async def comments_delete(comment_id: int, user: dict = Depends(auth.current_user)) -> dict:
+    c = db.get_comment(comment_id)
+    if c is None:
+        raise HTTPException(404, "Комментарий не найден.")
+    _get_owned_lesson(c["lesson_id"], user)
+    if c["user_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Удалить комментарий может только его автор или администратор.")
+    db.delete_comment(comment_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Динамика по учителю
+# ---------------------------------------------------------------------------
+
+@app.get("/api/progress")
+async def progress(user_id: int | None = None, user: dict = Depends(auth.current_user)) -> dict:
+    target_id = user["id"]
+    if user_id is not None and user_id != user["id"]:
+        if not auth.can_view_all(user):
+            raise HTTPException(403, "Динамику других учителей видят только методист и администратор.")
+        target_id = user_id
+    target = db.get_user(target_id)
+    if target is None:
+        raise HTTPException(404, "Пользователь не найден.")
+    lessons = []
+    for l in db.done_lessons_with_results(target_id):
+        lessons.append({
+            "id": l["id"],
+            "lesson_title": l["lesson_title"],
+            "subject": l["subject"],
+            "subject_key": l["subject_key"],
+            "grade": l["grade"],
+            "lesson_date": l["lesson_date"],
+            "created_at": l["created_at"],
+            "metrics": metrics.lesson_metrics(l["results"]),
+        })
+    # Урок без даты встаёт на место по дате загрузки.
+    lessons.sort(key=lambda x: (x["lesson_date"] or time.strftime("%Y-%m-%d", time.localtime(x["created_at"])), x["created_at"]))
+    resp = {"teacher": auth.public_user(target), "lessons": lessons}
+    if auth.can_view_all(user):
+        resp["teachers"] = [t for t in db.teachers_with_lessons() if t["done_count"] or t["id"] == target_id]
+    return resp
 
 
 # ---------------------------------------------------------------------------

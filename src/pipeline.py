@@ -77,6 +77,9 @@ def run_pipeline(
     subject_key: str | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_step: Callable[[int, int, str], None] | None = None,
+    lesson_language: str | None = None,
+    report_language: str = "русском",
+    report_meta: dict | None = None,
 ) -> dict:
     """
     Возвращает структурированные результаты анализа (для веб-отчёта),
@@ -91,6 +94,9 @@ def run_pipeline(
             on_progress(msg)
 
     step_total = len(STEP_LABELS)
+
+    # Язык пояснений модели (rationale, выводы, рекомендации) для этого урока.
+    la.set_feedback_language(report_language)
 
     def step(key: str) -> None:
         if on_step:
@@ -153,17 +159,20 @@ def run_pipeline(
     else:
         if single_track_mode:
             progress("Этап 2/7: транскрипция трека учителя + попытка различить учитель/ученик по смыслу речи (Gemini)...")
-            teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True)
+            teacher_segments = transcribe.transcribe_track(teacher_track, identify_speakers=True, language_hint=lesson_language,
+                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
             classroom_segments = []
             progress("Этап 3/7: общего трека нет - пропускаю.")
         else:
             progress("Этап 2/7: транскрипция трека учителя (Gemini)...")
-            teacher_segments = transcribe.transcribe_track(teacher_track)
+            teacher_segments = transcribe.transcribe_track(teacher_track, language_hint=lesson_language,
+                                                          cache_dir=str(workdir_p / "chunks_teacher"), on_progress=progress)
             transcribe.save_segments(teacher_segments, str(teacher_segs_path))
 
             progress("Этап 3/7: транскрипция общего трека класса (Gemini)...")
-            classroom_segments = transcribe.transcribe_track(classroom_track)
+            classroom_segments = transcribe.transcribe_track(classroom_track, language_hint=lesson_language,
+                                                            cache_dir=str(workdir_p / "chunks_classroom"), on_progress=progress)
             transcribe.save_segments(classroom_segments, str(classroom_segs_path))
 
     # --- Stage 3: align (Teacher/Student roles) ---
@@ -280,24 +289,7 @@ def run_pipeline(
     # --- Final: render docx ---
     step("report")
     progress("Генерация Word-отчёта...")
-    ctx = report.build_context(
-        teacher_name=planned.get("teacher_name", ""),
-        subject=planned.get("subject", ""),
-        lesson_date=planned.get("lesson_date", ""),
-        talk_time=talk_time,
-        questions=questions,
-        inquiry_episodes=inquiry_episodes,
-        alignment_rows=alignment_rows,
-        reflection=reflection,
-        intended_vs_enacted_summary=intended_vs_enacted_summary,
-        single_track_mode=single_track_mode,
-        audio_observability_note=audio_observability_note,
-    )
-    report.render_report(ctx, template_path, out_path)
-    progress(f"Готово. Отчёт сохранён: {out_path}")
-    progress("Напоминание: это AI-assisted ЧЕРНОВИК. Проверьте перед тем, как делиться с учителем/коучем.")
-
-    return build_results(
+    results = build_results(
         planned=planned,
         talk_time=talk_time,
         utterances=utterances,
@@ -306,13 +298,19 @@ def run_pipeline(
         alignment_rows=alignment_rows,
         reflection=reflection,
         intended_vs_enacted_summary=intended_vs_enacted_summary,
-        methodology_notes=ctx["methodology_notes"],
+        methodology_notes=report.methodology_notes(single_track_mode, audio_observability_note),
         single_track_mode=single_track_mode,
         slide_timeline=slide_timeline,
         criteria_rows=criteria_rows,
         subject_key=subject_key,
     )
-
+    # Веб-приложение пересобирает отчёт при каждом скачивании (с комментариями);
+    # этот файл — для CLI и как запасной вариант.
+    ctx = report.build_context(results, meta=report_meta or {}, subject_group=subject_def.get("label", ""))
+    report.render_report(ctx, template_path, out_path)
+    progress(f"Готово. Отчёт сохранён: {out_path}")
+    progress("Напоминание: это AI-assisted ЧЕРНОВИК. Проверьте перед тем, как делиться с учителем/коучем.")
+    return results
 
 def build_results(
     planned: dict,

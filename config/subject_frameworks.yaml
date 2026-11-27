@@ -79,6 +79,7 @@ subjects:
   language_literature:
     label: "Language and literature"
     label_ru: "Язык и литература"
+    label_kk: "Тіл және әдебиет"
     source: "Language and literature guide (updated April 2021)"
     key_concepts_emphasized: [Communication, Connections, Creativity, Perspective]
     related_concepts:
@@ -138,6 +139,7 @@ subjects:
   language_acquisition:
     label: "Language acquisition"
     label_ru: "Иностранный язык"
+    label_kk: "Шет тілі"
     source: "Language acquisition guide (for use from September 2020, updated Nov 2022)"
     key_concepts_emphasized: [Communication, Connections, Creativity, Culture]
     related_concept_groups:
@@ -211,6 +213,7 @@ subjects:
   individuals_societies:
     label: "Individuals and societies"
     label_ru: "Индивиды и общества"
+    label_kk: "Тұлға және қоғам"
     source: "Individuals and societies guide (updated Nov 2021)"
     key_concepts_emphasized: [Change, Global interactions, Systems, "Time, place and space"]
     related_concept_groups:
@@ -284,6 +287,7 @@ subjects:
   sciences:
     label: "Sciences"
     label_ru: "Естественные науки"
+    label_kk: "Жаратылыстану ғылымдары"
     source: "Sciences guide (updated April 2023)"
     key_concepts_emphasized: [Change, Relationships, Systems]
     related_concept_groups:
@@ -343,6 +347,7 @@ subjects:
   mathematics:
     label: "Mathematics"
     label_ru: "Математика"
+    label_kk: "Математика"
     source: "Mathematics guide (updated Nov 2022)"
     key_concepts_emphasized: [Form, Logic, Relationships]
     related_concepts:
@@ -403,6 +408,7 @@ subjects:
   arts:
     label: "Arts"
     label_ru: "Искусство"
+    label_kk: "Өнер"
     source: "MYP Arts guide (updated August 2023)"
     key_concepts_emphasized: [Aesthetics, Change, Communication, Identity]
     related_concept_groups:
@@ -460,6 +466,7 @@ subjects:
   physical_health:
     label: "Physical and health education"
     label_ru: "Физическая культура и здоровье"
+    label_kk: "Дене шынықтыру және денсаулық"
     source: "Physical and health education guide (updated April 2021)"
     key_concepts_emphasized: [Change, Communication, Development, Relationships]
     related_concepts:
@@ -515,6 +522,7 @@ subjects:
   design:
     label: "Design"
     label_ru: "Дизайн"
+    label_kk: "Дизайн"
     source: "Design guide (updated April 2021)"
     key_concepts_emphasized: [Communication, Communities, Development, Systems]
     related_concepts:
@@ -574,6 +582,7 @@ subjects:
   interdisciplinary:
     label: "Interdisciplinary unit"
     label_ru: "Междисциплинарный юнит"
+    label_kk: "Пәнаралық юнит"
     source: "Interdisciplinary teaching and learning in the MYP (updated May 2022)"
     key_concepts_emphasized: []
     related_concepts: []
