@@ -83,48 +83,45 @@ def _get_client() -> genai.Client:
     return _client
 
 
-TRANSCRIBE_PROMPT = """Ты — ассистент для транскрипции аудиозаписи школьного урока.
-Транскрибируй речь на записи ПОЛНОСТЬЮ, разбив на короткие смысловые сегменты
-(отдельные реплики/фразы, обычно 2-15 секунд каждая).
-
-Верни ТОЛЬКО валидный JSON-массив, без markdown, без пояснений вне JSON.
-Каждый элемент массива должен иметь такую форму:
-{"start_sec": <число секунд от начала файла>, "end_sec": <число секунд от начала файла>, "text": "точный текст реплики"}
-
-Правила:
-- Таймкоды - числа с плавающей точкой в секундах от начала ЭТОГО аудиофайла (не MM:SS, не строка).
-- Сохраняй исходный язык речи как есть (может быть русский, казахский, английский вперемешку) - не переводи.
-- Не пропускай короткие реплики и междометия, если они разборчивы.
-- Если фрагмент неразборчив - пропусти его, не выдумывай текст.
+# Общие правила. Модель генеративная: если аудио неразборчиво, она способна
+# «дописать» правдоподобный текст. Поэтому промпт не подсказывает, о чём
+# запись, и прямо запрещает додумывать; дополнительно расшифровка
+# проверяется по громкости аудио (_voice_activity / _drop_silent_segments).
+_RULES = """
+ГЛАВНОЕ ПРАВИЛО: записывай ТОЛЬКО то, что действительно звучит в этом
+аудиофайле, дословно. Ничего не додумывай, не пересказывай, не исправляй и
+не дописывай по смыслу. Не предполагай, о чём должна быть запись.
+- Если фрагмент неразборчив, тих или заглушён шумом — пропусти его
+  целиком. Лучше пропустить, чем написать то, чего не было.
+- Если в файле нет речи — верни пустой массив [].
+- Таймкоды — числа (секунды от начала ЭТОГО файла, например 83.5),
+  не строки и не формат MM:SS. end_sec всегда больше start_sec.
+- Сегменты идут по порядку и не перекрываются.
+- Сохраняй исходный язык речи (русский, казахский, английский, вперемешку) —
+  не переводи.
+- Верни ТОЛЬКО валидный JSON-массив, без markdown и пояснений.
 """
 
-# Используется, когда есть только ОДИН трек (обычно петличка учителя, но на
-# ней слышны и голоса учеников). Просим модель дополнительно предположить
-# роль говорящего по содержанию и тону речи - это НЕ акустическая
-# диаризация (Gemini не анализирует тембр голоса отдельно), а смысловая
-# эвристика: кто ведёт урок/задаёт вопросы (учитель) и кто отвечает
-# короткими репликами (ученики). Точность ниже, чем при физическом
-# разделении по двум трекам - см. предупреждение в report.py.
-TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT = """Ты — ассистент для транскрипции аудиозаписи школьного урока.
-Запись сделана на один микрофон (обычно петличка учителя), поэтому на ней
-слышен и учитель, и ученики. Транскрибируй речь ПОЛНОСТЬЮ, разбив на короткие
-смысловые сегменты (2-15 секунд), и для каждого сегмента предположи, кто
-говорит: учитель или ученик.
+TRANSCRIBE_PROMPT = """Сделай дословную расшифровку речи в аудиофайле, разбив её на
+короткие сегменты (отдельные фразы, обычно 2–15 секунд).
 
-Ориентируйся на роль в диалоге, а не на громкость: учитель обычно ведёт урок,
-задаёт вопросы, даёт инструкции, говорит развёрнуто и связно. Ученики обычно
-отвечают, часто короче, реже инициируют тему.
+Формат каждого элемента массива:
+{"start_sec": <число>, "end_sec": <число>, "text": "дословный текст"}
+""" + _RULES
 
-Верни ТОЛЬКО валидный JSON-массив, без markdown, без пояснений вне JSON.
-Каждый элемент массива должен иметь такую форму:
-{"start_sec": <число>, "end_sec": <число>, "text": "точный текст реплики", "speaker_role": "teacher" | "student"}
+# Используется, когда есть только ОДИН трек (обычно петличка учителя, на
+# которой слышны и ученики). Роль говорящего модель предполагает по смыслу
+# и голосу — это не акустическая диаризация, точность ниже, чем при двух
+# треках (см. предупреждение в отчёте).
+TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT = """Сделай дословную расшифровку речи в аудиофайле, разбив её на
+короткие сегменты (отдельные фразы, обычно 2–15 секунд). Запись сделана на
+один микрофон, обычно у учителя; на ней могут быть слышны и ученики.
+Для каждого сегмента укажи, кто говорит: учитель (ведёт, объясняет,
+спрашивает, даёт инструкции) или ученик (отвечает, спрашивает учителя).
 
-Правила:
-- Таймкоды - числа с плавающей точкой в секундах от начала ЭТОГО аудиофайла.
-- Сохраняй исходный язык речи как есть - не переводи.
-- Если не уверены, кто говорит - ставьте наиболее вероятный вариант по контексту, не пропускайте поле.
-- Если фрагмент неразборчив - пропусти его, не выдумывай текст.
-"""
+Формат каждого элемента массива:
+{"start_sec": <число>, "end_sec": <число>, "text": "дословный текст", "speaker_role": "teacher" | "student"}
+""" + _RULES
 
 
 def _clean_json_text(text: str) -> str:
@@ -147,7 +144,7 @@ def _clean_json_text(text: str) -> str:
 # на стыке попадает в расшифровку ровно один раз и целиком.
 # ---------------------------------------------------------------------------
 
-CHUNK_SEC = int(os.environ.get("TRANSCRIBE_CHUNK_SEC", "600"))
+CHUNK_SEC = int(os.environ.get("TRANSCRIBE_CHUNK_SEC", "300"))
 OVERLAP_SEC = 15
 PARALLEL = int(os.environ.get("TRANSCRIBE_PARALLEL", "4"))
 MAX_ATTEMPTS = 3
@@ -168,8 +165,8 @@ def _plan_chunks(total: float) -> list[tuple[int, float, float, float, float]]:
     i, start = 0, 0.0
     while start < total:
         end = min(total, start + CHUNK_SEC)
-        # хвост короче минуты присоединяем к предыдущему куску
-        if total - end < 60:
+        # хвост короче 40 секунд присоединяем к предыдущему куску
+        if total - end < 40:
             end = total
         chunks.append((i, start, end, max(0.0, start - OVERLAP_SEC), min(total, end + OVERLAP_SEC)))
         i, start = i + 1, end
@@ -208,7 +205,7 @@ def _transcribe_file(path: str, prompt: str) -> list[dict]:
                 response = client.models.generate_content(
                     model=MODEL,
                     contents=[prompt, uploaded],
-                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
                 )
                 raw = json.loads(_clean_json_text(response.text or ""))
                 if not isinstance(raw, list):
@@ -227,24 +224,151 @@ def _transcribe_file(path: str, prompt: str) -> list[dict]:
             pass
 
 
+def _parse_time(value) -> float | None:
+    """83.5 | "83.5" | "01:23" | "1:01:23" -> секунды."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        if ":" in text:
+            total = 0.0
+            for part in text.split(":"):
+                total = total * 60 + float(part)
+            return total
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _to_segments(raw: list[dict], offset: float, keep_from: float, keep_to: float, limit: float) -> list[Segment]:
+    """
+    Переводит ответ модели в сегменты на общей шкале урока и чинит таймкоды:
+    конец раньше начала или неправдоподобно длинная реплика -> длительность
+    оценивается по числу слов; реплики за пределами записи отбрасываются.
+    """
     out = []
     for s in raw:
+        if not isinstance(s, dict):
+            continue
         text = str(s.get("text", "")).strip()
-        if not text:
+        start, end = _parse_time(s.get("start_sec")), _parse_time(s.get("end_sec"))
+        if not text or start is None:
             continue
-        try:
-            start = float(s["start_sec"]) + offset
-            end = float(s["end_sec"]) + offset
-        except (KeyError, TypeError, ValueError):
-            continue
-        if end < start:
-            end = start
-        if not (keep_from <= start < keep_to):
+        start += offset
+        estimated = max(1.0, 0.45 * len(text.split()))
+        end = start + estimated if end is None else end + offset
+        if end <= start or end - start > max(30.0, 4 * estimated):
+            end = start + estimated
+        if start >= limit or not (keep_from <= start < keep_to):
             continue
         out.append(Segment(start=round(start, 2), end=round(min(end, limit), 2), text=text,
                            speaker_hint=s.get("speaker_role")))
     return out
+
+
+def _fix_order(segments: list[Segment]) -> list[Segment]:
+    """Сортирует и убирает наложения: реплика заканчивается не позже начала следующей."""
+    segments = sorted(segments, key=lambda x: x.start)
+    for a, b in zip(segments, segments[1:]):
+        if a.end > b.start:
+            a.end = max(a.start + 0.3, b.start)
+    return segments
+
+
+# ---------------------------------------------------------------------------
+# Проверка по громкости: реплика, «расшифрованная» там, где в записи тишина,
+# почти наверняка придумана моделью. Громкость считаем окнами по 0,5 с
+# (ffmpeg -> 4 кГц моно, потоково, без загрузки всего файла в память).
+# Порог речи — уровень шума записи (10-й перцентиль) плюс ~10 дБ. Правило
+# мягкое: удаляются только сегменты, в которых громко меньше 10% времени.
+# ---------------------------------------------------------------------------
+
+VAD_WINDOW = 0.5
+
+
+def _voice_activity(path: str):
+    import numpy as np
+
+    sr = 4000
+    frame = int(sr * VAD_WINDOW) * 2  # байт: int16
+    proc = subprocess.Popen(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path, "-vn", "-ac", "1", "-ar", str(sr),
+         "-f", "s16le", "-"],
+        stdout=subprocess.PIPE,
+    )
+    levels = []
+    while True:
+        buf = proc.stdout.read(frame)
+        if not buf:
+            break
+        x = np.frombuffer(buf[: len(buf) // 2 * 2], dtype=np.int16).astype(np.float32)
+        levels.append(float(np.sqrt(np.mean(x * x))) if x.size else 0.0)
+    proc.wait()
+    rms = np.array(levels)
+    if rms.size < 20:
+        return rms, None
+    floor = max(float(np.percentile(rms, 10)), 1.0)
+    loud = float(np.percentile(rms, 90))
+    # Нет заметной разницы между тихими и громкими местами (меньше ~12 дБ) —
+    # например, учитель говорит почти без пауз. Тишину надёжно не отличить,
+    # проверку не делаем.
+    if loud < floor * 4:
+        return rms, None
+    # Порог — примерно треть пути от уровня тишины до уровня речи (в дБ).
+    threshold = max(30.0, floor * (loud / floor) ** 0.3)
+    return rms, threshold
+
+
+MAX_DROP_SHARE = 0.50
+
+
+def _drop_silent_segments(segments: list[Segment], rms, threshold) -> tuple[list[Segment], list[Segment]]:
+    if rms is None or threshold is None or len(rms) == 0:
+        return segments, []
+    kept, dropped = [], []
+    n = len(rms)
+    for seg in segments:
+        a = max(0, int(seg.start / VAD_WINDOW))
+        b = min(n, max(a + 1, int(seg.end / VAD_WINDOW) + 1))
+        window = rms[a:b]
+        active = float((window > threshold).mean()) if len(window) else 0.0
+        if active < 0.10:
+            dropped.append(seg)
+        else:
+            kept.append(seg)
+    # Если «тишиной» оказалась заметная часть расшифровки, вероятнее ошибка
+    # самой проверки (необычная запись), чем выдумка модели: ничего не
+    # удаляем, а только помечаем расшифровку как подозрительную (см. _quality).
+    if segments and len(dropped) > MAX_DROP_SHARE * len(segments):
+        return segments, []
+    return kept, dropped
+
+
+def _quality(segments: list[Segment], dropped: list[Segment], rms, threshold, total: float) -> dict:
+    voiced = (float((rms > threshold).sum() * VAD_WINDOW)
+              if rms is not None and threshold is not None and len(rms) else None)
+    covered = 0.0
+    last_end = 0.0
+    for seg in sorted(segments, key=lambda x: x.start):
+        s0 = max(seg.start, last_end)
+        if seg.end > s0:
+            covered += seg.end - s0
+        last_end = max(last_end, seg.end)
+    return {
+        "duration_seconds": round(total, 1),
+        "segments": len(segments),
+        "dropped_silent_segments": len(dropped),
+        "dropped_examples": [f"{_mmss(d.start)} {d.text[:80]}" for d in dropped[:5]],
+        "voiced_seconds": round(voiced, 1) if voiced is not None else None,
+        "transcribed_seconds": round(covered, 1),
+    }
+
+
+def _mmss(sec: float) -> str:
+    sec = int(round(sec))
+    return f"{sec // 60:02d}:{sec % 60:02d}"
 
 
 def transcribe_track(
@@ -253,6 +377,7 @@ def transcribe_track(
     language_hint: str | None = None,
     cache_dir: str | None = None,
     on_progress=None,
+    stats: dict | None = None,
 ) -> list[Segment]:
     """
     Расшифровывает запись через Gemini. Короткие записи — одним запросом,
@@ -260,6 +385,8 @@ def transcribe_track(
 
     cache_dir — папка для промежуточных результатов по кускам (resume).
     on_progress(msg) — сообщения о ходе работы для журнала урока.
+    stats — если передан словарь, в него пишутся показатели качества
+    расшифровки (сколько реплик удалено как придуманные и т.п.).
     """
     prompt = TRANSCRIBE_WITH_SPEAKER_HINT_PROMPT if identify_speakers else TRANSCRIBE_PROMPT
     if language_hint:
@@ -270,14 +397,27 @@ def transcribe_track(
 
     total = _duration(audio_path)
     chunks = _plan_chunks(total)
+    say = on_progress or print
+
+    def finish(segments: list[Segment]) -> list[Segment]:
+        segments = _fix_order(segments)
+        try:
+            rms, threshold = _voice_activity(audio_path)
+        except Exception:  # noqa: BLE001 - проверка вспомогательная
+            rms, threshold = None, None
+        kept, dropped = _drop_silent_segments(segments, rms, threshold)
+        if dropped:
+            say(f"  Удалено реплик без речи в аудио (вероятно, придуманы моделью): {len(dropped)}")
+        if stats is not None:
+            stats.update(_quality(kept, dropped, rms, threshold, total))
+        print(f"[{audio_path}] Gemini transcription: {len(kept)} segments ({len(dropped)} dropped as silent)")
+        return kept
+
     if len(chunks) == 1:
-        segments = _to_segments(_transcribe_file(audio_path, prompt), 0.0, 0.0, float("inf"), total)
-        print(f"[{audio_path}] Gemini transcription: {len(segments)} segments")
-        return segments
+        return finish(_to_segments(_transcribe_file(audio_path, prompt), 0.0, 0.0, float("inf"), total))
 
     work = Path(cache_dir) if cache_dir else Path(tempfile.mkdtemp(prefix="chunks_"))
     work.mkdir(parents=True, exist_ok=True)
-    say = on_progress or print
     say(f"  Запись {total / 60:.0f} мин — расшифровка {len(chunks)} частями по {CHUNK_SEC // 60} мин")
 
     def run(chunk) -> list[Segment]:
@@ -313,10 +453,7 @@ def transcribe_track(
         # Удачные части уже в кэше: повторный запуск расшифрует только эти.
         raise ValueError("Не удалось расшифровать " + "; ".join(errors))
 
-    segments = [s for i in sorted(results) for s in results[i]]
-    segments.sort(key=lambda s: s.start)
-    print(f"[{audio_path}] Gemini transcription: {len(segments)} segments from {len(chunks)} chunks")
-    return segments
+    return finish([s for i in sorted(results) for s in results[i]])
 
 
 def save_segments(segments: list[Segment], out_path: str) -> None:

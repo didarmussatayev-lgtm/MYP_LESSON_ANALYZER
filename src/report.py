@@ -126,6 +126,16 @@ def methodology_notes(single_track_mode: bool = False, audio_observability_note:
     return notes
 
 
+def _quality_note(results: dict) -> str:
+    q = results.get("transcript_quality") or {}
+    dropped = sum((t or {}).get("dropped_silent_segments", 0) for t in (q.get("teacher"), q.get("classroom")))
+    if not dropped:
+        return ""
+    return (f" TRANSCRIPT CHECK: {dropped} transcribed segment(s) were removed because the recording is "
+            "silent at that point — speech-recognition models occasionally invent text over quiet or unclear "
+            "audio. Review the transcript before relying on quotes in this report.")
+
+
 def build_context(results: dict, meta: dict | None = None, comments: list[dict] | None = None,
                   subject_group: str = "") -> dict:
     """
@@ -275,7 +285,7 @@ def build_context(results: dict, meta: dict | None = None, comments: list[dict] 
         "areas_for_development": [_text(a) for a in reflection.get("areas_for_development", [])],
         "suggested_next_lesson_strategy": _text(reflection.get("suggested_next_lesson_strategy") or "—"),
         "comments": comments_fmt,
-        "methodology_notes": _text(results.get("methodology_notes") or methodology_notes(single)),
+        "methodology_notes": _text((results.get("methodology_notes") or methodology_notes(single)) + _quality_note(results)),
     }
 
 

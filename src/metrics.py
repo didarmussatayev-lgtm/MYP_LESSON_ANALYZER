@@ -51,3 +51,76 @@ def lesson_metrics(results: dict) -> dict:
         "plan_strong_pct": pct(strong + 0.5 * partial, len(rows)),
         "criteria_strong_pct": pct(crit_strong, len(crit)),
     }
+
+
+# ---------------------------------------------------------------------------
+# Починка результатов, сохранённых старыми версиями анализа
+# ---------------------------------------------------------------------------
+
+RESULTS_VERSION = 2
+
+
+def _mmss(sec: float) -> str:
+    sec = max(0, int(round(sec)))
+    h, rest = divmod(sec, 3600)
+    return f"{h}:{rest // 60:02d}:{rest % 60:02d}" if h else f"{rest // 60:02d}:{rest % 60:02d}"
+
+
+def _norm_ts(value) -> str:
+    text = str(value if value is not None else "").strip()
+    if not text or ":" in text:
+        return text
+    try:
+        return _mmss(float(text.replace(",", ".")))
+    except ValueError:
+        return text
+
+
+def repair_results(results: dict) -> bool:
+    """
+    Старые версии могли сохранить «битые» таймкоды расшифровки (конец реплики
+    раньше начала) — из-за них доли речи получались отрицательными или
+    больше 100%, — а модель иногда писала таймкоды секундами («1422.0»).
+    Пересчитывает время речи по сохранённой расшифровке и приводит таймкоды
+    к MM:SS. Возвращает True, если что-то изменилось.
+    """
+    if not results or results.get("version", 1) >= RESULTS_VERSION:
+        return False
+    from align import talk_time_summary
+    from common import Utterance
+
+    tt = results.get("talk_time") or {}
+    total = tt.get("total_duration_seconds")
+    utts = []
+    for u in results.get("utterances") or []:
+        try:
+            start, end = float(u["start"]), float(u["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        estimated = max(1.0, 0.45 * len(str(u.get("text", "")).split()))
+        if end <= start or end - start > max(30.0, 4 * estimated):
+            end = start + estimated
+        utts.append(Utterance(start=start, end=end, speaker=u.get("speaker", "Teacher"),
+                              text=u.get("text", ""), source=u.get("source", "lapel")))
+    utts.sort(key=lambda x: x.start)
+    for a, b in zip(utts, utts[1:]):
+        if a.end > b.start:
+            a.end = max(a.start + 0.3, b.start)
+    if utts:
+        new_tt = talk_time_summary(utts, total_duration_seconds=total)
+        results["talk_time"] = new_tt
+        results["utterances"] = [u.__dict__ for u in utts]
+        summary = results.setdefault("summary", {})
+        summary["teacher_pct"] = new_tt["teacher_pct"]
+        summary["student_pct"] = new_tt["student_pct"]
+
+    for key, fields in (("questions", ("timestamp",)),
+                        ("inquiry_episodes", ("start_timestamp", "end_timestamp")),
+                        ("criteria_rows", ("timestamp",))):
+        for item in results.get(key) or []:
+            if isinstance(item, dict):
+                for f in fields:
+                    if f in item:
+                        item[f] = _norm_ts(item[f])
+    results["version"] = RESULTS_VERSION
+    return True

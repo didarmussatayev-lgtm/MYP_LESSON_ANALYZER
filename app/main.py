@@ -561,6 +561,9 @@ async def lessons_list(scope: str = "mine", user: dict = Depends(auth.current_us
 @app.get("/api/lessons/{lesson_id}")
 async def lesson_detail(lesson_id: str, user: dict = Depends(auth.current_user)) -> dict:
     lesson = _get_owned_lesson(lesson_id, user)
+    # Уроки, проанализированные старыми версиями, чинятся при первом открытии.
+    if lesson.get("results") and metrics.repair_results(lesson["results"]):
+        db.update_lesson(lesson_id, results=lesson["results"])
     lesson.pop("upload_paths", None)
     lesson.pop("report_path", None)
     if user["role"] != "admin":
@@ -604,6 +607,8 @@ def _subject_label(subject_key: str) -> str:
 
 
 def _render_lesson_docx(lesson: dict) -> bytes:
+    if lesson.get("results") and metrics.repair_results(lesson["results"]):
+        db.update_lesson(lesson["id"], results=lesson["results"])
     ctx = report.build_context(
         lesson.get("results") or {},
         meta=lesson,
@@ -702,6 +707,8 @@ async def progress(user_id: int | None = None, user: dict = Depends(auth.current
         raise HTTPException(404, "Пользователь не найден.")
     lessons = []
     for l in db.done_lessons_with_results(target_id):
+        if metrics.repair_results(l["results"]):
+            db.update_lesson(l["id"], results=l["results"])
         lessons.append({
             "id": l["id"],
             "lesson_title": l["lesson_title"],
